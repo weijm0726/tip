@@ -1651,16 +1651,13 @@ void update_process_times(int user_tick)
 /**
  * __run_timers - run all expired timers (if any) on this CPU.
  * @base: the timer vector to be processed.
+ *
+ * Caller must hold the base lock.
  */
 static inline void __run_timers(struct timer_base *base)
 {
 	struct hlist_head heads[LVL_DEPTH];
 	int levels;
-
-	if (!time_after_eq(jiffies, base->clk))
-		return;
-
-	spin_lock_irq(&base->lock);
 
 	while (time_after_eq(jiffies, base->clk)) {
 
@@ -1671,7 +1668,20 @@ static inline void __run_timers(struct timer_base *base)
 			expire_timers(base, heads + levels);
 	}
 	base->running_timer = NULL;
-	spin_unlock_irq(&base->lock);
+}
+
+static void run_timer_base(int index, bool check_nohz)
+{
+	struct timer_base *base = this_cpu_ptr(&timer_bases[index]);
+
+	if (check_nohz && !base->nohz_active)
+		return;
+
+	if (time_after_eq(jiffies, base->clk)) {
+		spin_lock_irq(&base->lock);
+		__run_timers(base);
+		spin_unlock_irq(&base->lock);
+	}
 }
 
 /*
@@ -1679,16 +1689,11 @@ static inline void __run_timers(struct timer_base *base)
  */
 static __latent_entropy void run_timer_softirq(struct softirq_action *h)
 {
-	struct timer_base *base = this_cpu_ptr(&timer_bases[BASE_LOCAL]);
+	run_timer_base(BASE_LOCAL, false);
 
-	__run_timers(base);
 	if (IS_ENABLED(CONFIG_NO_HZ_COMMON)) {
-		base = this_cpu_ptr(&timer_bases[BASE_GLOBAL]);
-		__run_timers(base);
-
-		base = this_cpu_ptr(&timer_bases[BASE_DEF]);
-		if (base->nohz_active)
-			__run_timers(base);
+		run_timer_base(BASE_GLOBAL, false);
+		run_timer_base(BASE_DEF, true);
 	}
 }
 
