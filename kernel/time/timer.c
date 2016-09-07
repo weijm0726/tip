@@ -857,18 +857,6 @@ static inline struct timer_base *get_timer_base(u32 tflags)
 }
 
 #ifdef CONFIG_NO_HZ_COMMON
-static inline struct timer_base *
-get_target_base(struct timer_base *base, unsigned tflags)
-{
-#ifdef CONFIG_SMP
-	if ((tflags & TIMER_PINNED) || !base->migration_enabled)
-		return get_timer_this_cpu_base(tflags);
-	return get_timer_cpu_base(tflags, get_nohz_timer_target());
-#else
-	return get_timer_this_cpu_base(tflags);
-#endif
-}
-
 static inline void forward_timer_base(struct timer_base *base)
 {
 	unsigned long jnow = READ_ONCE(jiffies);
@@ -890,12 +878,6 @@ static inline void forward_timer_base(struct timer_base *base)
 		base->clk = base->next_expiry;
 }
 #else
-static inline struct timer_base *
-get_target_base(struct timer_base *base, unsigned tflags)
-{
-	return get_timer_this_cpu_base(tflags);
-}
-
 static inline void forward_timer_base(struct timer_base *base) { }
 #endif
 
@@ -985,7 +967,7 @@ __mod_timer(struct timer_list *timer, unsigned long expires, bool pending_only)
 	if (!ret && pending_only)
 		goto out_unlock;
 
-	new_base = get_target_base(base, timer->flags);
+	new_base = get_timer_this_cpu_base(timer->flags);
 
 	if (base != new_base) {
 		/*
