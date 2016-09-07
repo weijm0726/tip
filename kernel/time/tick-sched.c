@@ -112,6 +112,24 @@ static ktime_t tick_init_jiffy_update(void)
 	return period;
 }
 
+#ifdef CONFIG_NO_HZ_COMMON
+/*
+ * Read jiffies and the time when jiffies were updated last
+ */
+u64 get_jiffies_update(unsigned long *basej)
+{
+	unsigned long seq, basejiff;
+	u64 basemono;
+
+	do {
+		seq = read_seqbegin(&jiffies_lock);
+		basemono = last_jiffies_update;
+		basejiff = jiffies;
+	} while (read_seqretry(&jiffies_lock, seq));
+	*basej = basejiff;
+	return basemono;
+}
+#endif
 
 static void tick_sched_do_timer(ktime_t now)
 {
@@ -667,15 +685,10 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 {
 	struct clock_event_device *dev = __this_cpu_read(tick_cpu_device.evtdev);
 	u64 basemono, next_tick, next_local, next_global, next_rcu, delta, expires;
-	unsigned long seq, basejiff;
+	unsigned long basejiff;
 	ktime_t	tick;
 
-	/* Read jiffies and the time when jiffies were updated last */
-	do {
-		seq = read_seqbegin(&jiffies_lock);
-		basemono = last_jiffies_update;
-		basejiff = jiffies;
-	} while (read_seqretry(&jiffies_lock, seq));
+	basemono = get_jiffies_update(&basejiff);
 	ts->last_jiffies = basejiff;
 
 	if (rcu_needs_cpu(basemono, &next_rcu) ||

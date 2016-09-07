@@ -151,6 +151,7 @@ static inline void tick_nohz_init(void) { }
 
 #ifdef CONFIG_NO_HZ_COMMON
 extern unsigned long tick_nohz_active;
+extern u64 get_jiffies_update(unsigned long *basej);
 #else
 #define tick_nohz_active (0)
 #endif
