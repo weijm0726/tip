@@ -1472,23 +1472,27 @@ static u64 cmp_next_hrtimer_event(u64 basem, u64 expires)
  * get_next_timer_interrupt - return the time (clock mono) of the next timer
  * @basej:	base time jiffies
  * @basem:	base time clock monotonic
+ * @global_evt:	Pointer to store the expiry time of the next global timer
  *
  * Returns the tick aligned clock monotonic time of the next pending
  * timer or KTIME_MAX if no timer is pending.
  */
-u64 get_next_timer_interrupt(unsigned long basej, u64 basem)
+u64 get_next_timer_interrupt(unsigned long basej, u64 basem, u64 *global_evt)
 {
 	unsigned long nextevt, nextevt_local, nextevt_global;
 	bool local_empty, global_empty, local_first, is_idle;
 	struct timer_base *base_local, *base_global;
-	u64 expires = KTIME_MAX;
+	u64 local_evt = KTIME_MAX;
+
+	/* Preset global event */
+	*global_evt = KTIME_MAX;
 
 	/*
 	 * Pretend that there is no timer pending if the cpu is offline.
 	 * Possible pending timers will be migrated later to an active cpu.
 	 */
 	if (cpu_is_offline(smp_processor_id()))
-		return expires;
+		return local_evt;
 
 	base_local = this_cpu_ptr(&timer_bases[BASE_LOCAL]);
 	base_global = this_cpu_ptr(&timer_bases[BASE_GLOBAL]);
@@ -1532,14 +1536,39 @@ u64 get_next_timer_interrupt(unsigned long basej, u64 basem)
 	spin_unlock(&base_local->lock);
 	spin_unlock(&base_global->lock);
 
-	if (!local_empty || !global_empty) {
+	/*
+	 * If the bases are not marked idle, i.e one of the events is at
+	 * max. one tick away, use the next event for calculating next
+	 * local expiry value. The next global event is left as KTIME_MAX,
+	 * so this CPU will not queue itself in the global expiry
+	 * mechanism.
+	 */
+	if (!is_idle) {
 		/* If we missed a tick already, force 0 delta */
 		if (time_before_eq(nextevt, basej))
 			nextevt = basej;
-		expires = basem + (nextevt - basej) * TICK_NSEC;
+		local_evt = basem + (nextevt - basej) * TICK_NSEC;
+		return cmp_next_hrtimer_event(basem, local_evt);
 	}
 
-	return cmp_next_hrtimer_event(basem, expires);
+	/*
+	 * If the bases are marked idle, i.e. the next event on both the
+	 * local and the global queue are farther away than a tick,
+	 * evaluate both bases. No need to check whether one of the bases
+	 * has an already expired timer as this is caught by the !is_idle
+	 * condition above.
+	 */
+	if (!local_empty)
+		local_evt = basem + (nextevt_local - basej) * TICK_NSEC;
+
+	/*
+	 * If the local queue expires first, there is no requirement for
+	 * queuing the CPU in the global expiry mechanism.
+	 */
+	if (!local_first && !global_empty)
+		*global_evt = basem + (nextevt_global - basej) * TICK_NSEC;
+
+	return cmp_next_hrtimer_event(basem, local_evt);
 }
 
 /**

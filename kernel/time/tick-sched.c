@@ -666,7 +666,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 					 ktime_t now, int cpu)
 {
 	struct clock_event_device *dev = __this_cpu_read(tick_cpu_device.evtdev);
-	u64 basemono, next_tick, next_tmr, next_rcu, delta, expires;
+	u64 basemono, next_tick, next_local, next_global, next_rcu, delta, expires;
 	unsigned long seq, basejiff;
 	ktime_t	tick;
 
@@ -689,10 +689,12 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 		 * disabled this also looks at the next expiring
 		 * hrtimer.
 		 */
-		next_tmr = get_next_timer_interrupt(basejiff, basemono);
-		ts->next_timer = next_tmr;
+		next_local = get_next_timer_interrupt(basejiff, basemono,
+						      &next_global);
+		next_local = min(next_local, next_global);
+		ts->next_timer = next_local;
 		/* Take the next rcu event into account */
-		next_tick = next_rcu < next_tmr ? next_rcu : next_tmr;
+		next_tick = next_rcu < next_local ? next_rcu : next_local;
 	}
 
 	/*
