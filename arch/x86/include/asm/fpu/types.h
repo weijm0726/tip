@@ -276,20 +276,6 @@ union fpregs_state {
  */
 struct fpu {
 	/*
-	 * @last_cpu:
-	 *
-	 * Records the last CPU on which this context was loaded into
-	 * FPU registers. (In the lazy-restore case we might be
-	 * able to reuse FPU registers across multiple context switches
-	 * this way, if no intermediate task used the FPU.)
-	 *
-	 * A value of -1 is used to indicate that the FPU state in context
-	 * memory is newer than the FPU state in registers, and that the
-	 * FPU state should be reloaded next time the task is run.
-	 */
-	unsigned int			last_cpu;
-
-	/*
 	 * @fpstate_active:
 	 *
 	 * This flag indicates whether this context is active: if the task
@@ -320,6 +306,16 @@ struct fpu {
 	 * on lazy-switching CPUs.
 	 */
 	unsigned char			fpregs_active;
+
+	/*
+	 * @fpregs_cached:
+	 *
+	 * This flag tells us whether this context is loaded into a CPU
+	 * right now.
+	 *
+	 * This is set to 0 if a task is migrated to another CPU.
+	 */
+	unsigned char			fpregs_cached;
 
 	/*
 	 * @state:

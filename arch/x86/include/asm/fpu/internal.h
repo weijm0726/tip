@@ -490,7 +490,7 @@ DECLARE_PER_CPU(struct fpu *, fpu_fpregs_owner_ctx);
 
 /*
  * The in-register FPU state for an FPU context on a CPU is assumed to be
- * valid if the fpu->last_cpu matches the CPU, and the fpu_fpregs_owner_ctx
+ * valid if fpu->fpregs_cached is still set, and if the fpu_fpregs_owner_ctx
  * matches the FPU.
  *
  * If the FPU register state is valid, the kernel can skip restoring the
@@ -512,12 +512,12 @@ static inline void __cpu_invalidate_fpregs_state(void)
 
 static inline void __fpu_invalidate_fpregs_state(struct fpu *fpu)
 {
-	fpu->last_cpu = -1;
+	fpu->fpregs_cached = 0;
 }
 
 static inline int fpregs_state_valid(struct fpu *fpu, unsigned int cpu)
 {
-	return fpu == this_cpu_read_stable(fpu_fpregs_owner_ctx) && cpu == fpu->last_cpu;
+	return fpu == this_cpu_read_stable(fpu_fpregs_owner_ctx) && fpu->fpregs_cached;
 }
 
 /*
@@ -573,15 +573,16 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
 {
 	if (old_fpu->fpregs_active) {
 		if (!copy_fpregs_to_fpstate(old_fpu))
-			old_fpu->last_cpu = -1;
+			old_fpu->fpregs_cached = 0;
 		else
-			old_fpu->last_cpu = cpu;
+			old_fpu->fpregs_cached = 1;
 
 		/* But leave fpu_fpregs_owner_ctx! */
 		old_fpu->fpregs_active = 0;
 		trace_x86_fpu_regs_deactivated(old_fpu);
-	} else
-		old_fpu->last_cpu = -1;
+	} else {
+		old_fpu->fpregs_cached = 0;
+	}
 }
 
 /*
