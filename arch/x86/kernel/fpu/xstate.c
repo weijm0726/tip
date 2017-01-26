@@ -926,9 +926,9 @@ int arch_set_user_pkey_access(struct task_struct *tsk, int pkey,
 static inline int
 __copy_xstate_to_kernel(void *kbuf,
 			const void *data,
-			unsigned int pos, unsigned int count, int start_pos, int end_pos)
+			unsigned int pos, unsigned int count, int end_pos)
 {
-	if ((count == 0) || (pos < start_pos))
+	if (!count)
 		return 0;
 
 	if (end_pos < 0 || pos < end_pos) {
@@ -971,7 +971,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int po
 	offset = offsetof(struct xregs_state, header);
 	size = sizeof(header);
 
-	ret = __copy_xstate_to_kernel(kbuf, &header, offset, size, 0, count);
+	ret = __copy_xstate_to_kernel(kbuf, &header, offset, size, count);
 	if (ret)
 		return ret;
 
@@ -985,7 +985,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int po
 			offset = xstate_offsets[i];
 			size = xstate_sizes[i];
 
-			ret = __copy_xstate_to_kernel(kbuf, src, offset, size, 0, count);
+			ret = __copy_xstate_to_kernel(kbuf, src, offset, size, count);
 			if (ret)
 				return ret;
 
@@ -1001,7 +1001,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int po
 	offset = offsetof(struct fxregs_state, sw_reserved);
 	size = sizeof(xstate_fx_sw_bytes);
 
-	ret = __copy_xstate_to_kernel(kbuf, xstate_fx_sw_bytes, offset, size, 0, count);
+	ret = __copy_xstate_to_kernel(kbuf, xstate_fx_sw_bytes, offset, size, count);
 	if (ret)
 		return ret;
 
@@ -1009,9 +1009,9 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int po
 }
 
 static inline int
-__copy_xstate_to_user(void __user *ubuf, const void *data, unsigned int pos, unsigned int count, int start_pos, int end_pos)
+__copy_xstate_to_user(void __user *ubuf, const void *data, unsigned int pos, unsigned int count, int end_pos)
 {
-	if ((count == 0) || (pos < start_pos))
+	if (!count)
 		return 0;
 
 	if (end_pos < 0 || pos < end_pos) {
@@ -1054,7 +1054,7 @@ int copy_xstate_to_user(void __user *ubuf, struct xregs_state *xsave, unsigned i
 	offset = offsetof(struct xregs_state, header);
 	size = sizeof(header);
 
-	ret = __copy_xstate_to_user(ubuf, &header, offset, size, 0, count);
+	ret = __copy_xstate_to_user(ubuf, &header, offset, size, count);
 	if (ret)
 		return ret;
 
@@ -1068,7 +1068,7 @@ int copy_xstate_to_user(void __user *ubuf, struct xregs_state *xsave, unsigned i
 			offset = xstate_offsets[i];
 			size = xstate_sizes[i];
 
-			ret = __copy_xstate_to_user(ubuf, src, offset, size, 0, count);
+			ret = __copy_xstate_to_user(ubuf, src, offset, size, count);
 			if (ret)
 				return ret;
 
@@ -1084,7 +1084,7 @@ int copy_xstate_to_user(void __user *ubuf, struct xregs_state *xsave, unsigned i
 	offset = offsetof(struct fxregs_state, sw_reserved);
 	size = sizeof(xstate_fx_sw_bytes);
 
-	ret = __copy_xstate_to_user(ubuf, xstate_fx_sw_bytes, offset, size, 0, count);
+	ret = __copy_xstate_to_user(ubuf, xstate_fx_sw_bytes, offset, size, count);
 	if (ret)
 		return ret;
 
