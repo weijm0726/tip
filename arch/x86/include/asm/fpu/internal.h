@@ -486,11 +486,11 @@ extern int copy_fpstate_to_sigframe(void __user *buf, void __user *fp, int size)
  * FPU context switch related helper methods:
  */
 
-DECLARE_PER_CPU(struct fpu *, fpu_fpregs_owner_ctx);
+DECLARE_PER_CPU(struct fpu *, fpregs_owner_ctx);
 
 /*
  * The in-register FPU state for an FPU context on a CPU is assumed to be
- * valid if fpu->fpregs_cached is still set, and if the fpu_fpregs_owner_ctx
+ * valid if fpu->fpregs_owner is still set, and if the fpregs_owner_ctx
  * matches the FPU.
  *
  * If the FPU register state is valid, the kernel can skip restoring the
@@ -507,17 +507,17 @@ DECLARE_PER_CPU(struct fpu *, fpu_fpregs_owner_ctx);
  */
 static inline void __cpu_invalidate_fpregs_state(void)
 {
-	__this_cpu_write(fpu_fpregs_owner_ctx, NULL);
+	__this_cpu_write(fpregs_owner_ctx, NULL);
 }
 
 static inline void __fpu_invalidate_fpregs_state(struct fpu *fpu)
 {
-	fpu->fpregs_cached = 0;
+	fpu->fpregs_owner = 0;
 }
 
 static inline int fpregs_state_valid(struct fpu *fpu, unsigned int cpu)
 {
-	return fpu == this_cpu_read_stable(fpu_fpregs_owner_ctx) && fpu->fpregs_cached;
+	return fpu == this_cpu_read_stable(fpregs_owner_ctx) && fpu->fpregs_owner;
 }
 
 /*
@@ -526,13 +526,13 @@ static inline int fpregs_state_valid(struct fpu *fpu, unsigned int cpu)
  */
 static inline void fpregs_deactivate(struct fpu *fpu)
 {
-	this_cpu_write(fpu_fpregs_owner_ctx, NULL);
+	this_cpu_write(fpregs_owner_ctx, NULL);
 	trace_x86_fpu_regs_deactivated(fpu);
 }
 
 static inline void fpregs_activate(struct fpu *fpu)
 {
-	this_cpu_write(fpu_fpregs_owner_ctx, fpu);
+	this_cpu_write(fpregs_owner_ctx, fpu);
 	trace_x86_fpu_regs_activated(fpu);
 }
 
@@ -552,14 +552,14 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
 {
 	if (old_fpu->fpstate_active) {
 		if (!copy_fpregs_to_fpstate(old_fpu))
-			old_fpu->fpregs_cached = 0;
+			old_fpu->fpregs_owner = 0;
 		else
-			old_fpu->fpregs_cached = 1;
+			old_fpu->fpregs_owner = 1;
 
-		/* But leave fpu_fpregs_owner_ctx! */
+		/* But leave fpregs_owner_ctx! */
 		trace_x86_fpu_regs_deactivated(old_fpu);
 	} else {
-		old_fpu->fpregs_cached = 0;
+		old_fpu->fpregs_owner = 0;
 	}
 }
 

@@ -285,14 +285,22 @@ struct fpu {
 	unsigned char			fpstate_active;
 
 	/*
-	 * @fpregs_cached:
+	 * @fpregs_owner:
 	 *
 	 * This flag tells us whether this context is loaded into a CPU
 	 * right now.
 	 *
 	 * This is set to 0 if a task is migrated to another CPU.
+	 *
+	 * NOTE: the fpregs_owner_ctx percpu pointer also has to point to
+	 *       this FPU context for the register cache to be valid. If any
+	 *       of these two flags is cleared then the cache is invalid.
+	 *       Some internals can access the context-flag more easily,
+	 *       others have easier access to the percpu variable. The
+	 *       FPU context-switching code has access to both so there's
+	 *       very little cost of having the cache indexed in two ways:
 	 */
-	unsigned char			fpregs_cached;
+	unsigned char			fpregs_owner;
 
 	/*
 	 * @state:

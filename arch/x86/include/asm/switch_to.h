@@ -78,7 +78,7 @@ do {									\
  */
 static inline void arch_task_migrate(struct task_struct *p)
 {
-	p->thread.fpu.fpregs_cached = 0;
+	p->thread.fpu.fpregs_owner = 0;
 }
 #define arch_task_migrate arch_task_migrate
 

@@ -39,7 +39,7 @@ static DEFINE_PER_CPU(bool, in_kernel_fpu);
 /*
  * Track which context is using the FPU on the CPU:
  */
-DEFINE_PER_CPU(struct fpu *, fpu_fpregs_owner_ctx);
+DEFINE_PER_CPU(struct fpu *, fpregs_owner_ctx);
 
 static void kernel_fpu_disable(void)
 {
@@ -189,7 +189,7 @@ EXPORT_SYMBOL_GPL(fpstate_init);
 
 int fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu)
 {
-	dst_fpu->fpregs_cached = 0;
+	dst_fpu->fpregs_owner = 0;
 
 	if (!src_fpu->fpstate_active || !static_cpu_has(X86_FEATURE_FPU))
 		return 0;
