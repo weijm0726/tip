@@ -923,7 +923,7 @@ int arch_set_user_pkey_access(struct task_struct *tsk, int pkey,
  * This is similar to user_regset_copyout(), but will not add offset to
  * the source data pointer or increment pos, count, kbuf, and ubuf.
  */
-static inline int
+static inline void
 __copy_xstate_to_kernel(void *kbuf, const void *data,
 			unsigned int offset, unsigned int size, unsigned int size_total)
 {
@@ -932,7 +932,6 @@ __copy_xstate_to_kernel(void *kbuf, const void *data,
 
 		memcpy(kbuf + offset, data, copy);
 	}
-	return 0;
 }
 
 /*
@@ -945,8 +944,8 @@ __copy_xstate_to_kernel(void *kbuf, const void *data,
 int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int offset_start, unsigned int size_total)
 {
 	unsigned int offset, size;
-	int ret, i;
 	struct xstate_header header;
+	int i;
 
 	/*
 	 * Currently copy_regset_to_user() starts from pos 0:
@@ -967,9 +966,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int of
 	offset = offsetof(struct xregs_state, header);
 	size = sizeof(header);
 
-	ret = __copy_xstate_to_kernel(kbuf, &header, offset, size, size_total);
-	if (ret)
-		return ret;
+	__copy_xstate_to_kernel(kbuf, &header, offset, size, size_total);
 
 	for (i = 0; i < XFEATURE_MAX; i++) {
 		/*
@@ -985,9 +982,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int of
 			if (offset + size > size_total)
 				break;
 
-			ret = __copy_xstate_to_kernel(kbuf, src, offset, size, size_total);
-			if (ret)
-				return ret;
+			__copy_xstate_to_kernel(kbuf, src, offset, size, size_total);
 		}
 
 	}
@@ -998,9 +993,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int of
 	offset = offsetof(struct fxregs_state, sw_reserved);
 	size = sizeof(xstate_fx_sw_bytes);
 
-	ret = __copy_xstate_to_kernel(kbuf, xstate_fx_sw_bytes, offset, size, size_total);
-	if (ret)
-		return ret;
+	__copy_xstate_to_kernel(kbuf, xstate_fx_sw_bytes, offset, size, size_total);
 
 	return 0;
 }
