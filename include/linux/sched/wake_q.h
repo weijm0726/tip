@@ -1,8 +1,6 @@
 #ifndef _LINUX_SCHED_WAKE_Q_H
 #define _LINUX_SCHED_WAKE_Q_H
 
-#include <linux/sched.h>
-
 /*
  * Wake-queues are lists of tasks with a pending wakeup, whose
  * callers have already marked the task as woken internally,
@@ -29,6 +27,9 @@
  * must ensure the call is done inside a loop, confirming that the
  * wakeup condition has in fact occurred.
  */
+
+struct task_struct;
+
 struct wake_q_node {
 	struct wake_q_node *next;
 };
