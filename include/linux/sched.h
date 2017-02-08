@@ -476,6 +476,10 @@ enum perf_event_task_context {
 	perf_nr_task_contexts,
 };
 
+struct wake_q_node {
+	struct wake_q_node *next;
+};
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -765,7 +769,7 @@ struct task_struct {
 	/* Protection of the PI data structures: */
 	raw_spinlock_t			pi_lock;
 
-	void				*wake_q;
+	struct wake_q_node		wake_q;
 
 #ifdef CONFIG_RT_MUTEXES
 	/* PI waiters blocked on a rt_mutex held by this task: */

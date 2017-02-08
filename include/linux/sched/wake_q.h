@@ -28,11 +28,7 @@
  * wakeup condition has in fact occurred.
  */
 
-struct task_struct;
-
-struct wake_q_node {
-	struct wake_q_node *next;
-};
+#include <linux/sched.h>
 
 struct wake_q_head {
 	struct wake_q_node *first;
