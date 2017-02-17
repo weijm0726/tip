@@ -16,6 +16,9 @@
 #include "timer_migration.h"
 #include "tick-internal.h"
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/timer_migration.h>
+
 #ifdef DEBUG
 # define DBG_BUG_ON(x)	BUG_ON(x)
 #else
@@ -53,6 +56,8 @@ static void tmigr_add_evt(struct tmigr_group *group, struct tmigr_event *evt)
 		group->groupevt.nextevt.expires = evt->nextevt.expires;
 		group->groupevt.cpu = evt->cpu;
 	}
+
+	trace_tmigr_group_addevt(group);
 }
 
 static void tmigr_remove_evt(struct tmigr_group *group, struct tmigr_event *evt)
@@ -86,6 +91,8 @@ static void tmigr_remove_evt(struct tmigr_group *group, struct tmigr_event *evt)
 		group->groupevt.nextevt.expires = nextevt->nextevt.expires;
 		group->groupevt.cpu = nextevt->cpu;
 	}
+
+	trace_tmigr_group_removeevt(group);
 }
 
 static void tmigr_update_remote(unsigned int cpu, u64 now, unsigned long jif)
@@ -142,6 +149,7 @@ static void tmigr_update_remote(unsigned int cpu, u64 now, unsigned long jif)
 	tmigr_add_evt(group, &tmc->cpuevt);
 
 done:
+	trace_tmigr_cpu_update_remote(tmc, cpu);
 	raw_spin_unlock(&group->lock);
 	raw_spin_unlock_irq(&tmc->lock);
 }
@@ -152,6 +160,8 @@ static void __tmigr_handle_remote(struct tmigr_group *group, unsigned int cpu,
 	struct timerqueue_node *tmr;
 	struct tmigr_group *parent;
 	struct tmigr_event *evt;
+
+	trace_tmigr_handle_remote(group, cpu);
 
 again:
 	raw_spin_lock_irq(&group->lock);
@@ -332,6 +342,7 @@ static u64 tmigr_set_cpu_inactive(struct tmigr_group *group,
 		nextevt = group->groupevt.nextevt.expires;
 	}
 done:
+	trace_tmigr_group_set_cpu_inactive(group);
 	raw_spin_unlock(&group->lock);
 	return nextevt;
 }
@@ -390,6 +401,9 @@ static void tmigr_set_cpu_active(struct tmigr_group *group,
 		if (parent)
 			tmigr_set_cpu_active(parent, &group->groupevt, cpu);
 	}
+
+	trace_tmigr_group_set_cpu_active(group);
+
 	/*
 	 * Update groupevt and dequeue @evt. Must be called after parent
 	 * groups have been updated above so @group->groupevt is inactive.
@@ -425,6 +439,7 @@ static void tmigr_free_group(struct tmigr_group *group)
 		if (!group->parent->num_childs)
 			tmigr_free_group(group->parent);
 	}
+	trace_tmigr_group_free(group);
 	list_del(&group->list);
 	free_cpumask_var(group->cpus);
 	kfree(group);
@@ -475,6 +490,7 @@ static struct tmigr_group *tmigr_get_group(unsigned int node, unsigned int lvl)
 	tmigr_init_group(group, lvl, node);
 	/* Setup successful. Add it to the hierarchy */
 	list_add(&group->list, &tmigr_level_list[lvl]);
+	trace_tmigr_group_set(group);
 	return group;
 }
 
@@ -502,6 +518,7 @@ static int tmigr_setup_parents(unsigned int lvl)
 		if (group->active)
 			tmigr_set_cpu_active(parent, NULL, group->migrator);
 		raw_spin_unlock_irq(&group->lock);
+		trace_tmigr_group_setup_parents(group);
 		ret = 1;
 	}
 	return ret;
