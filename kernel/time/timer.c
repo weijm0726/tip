@@ -970,8 +970,6 @@ __mod_timer(struct timer_list *timer, unsigned long expires, bool pending_only)
 	if (!ret && pending_only)
 		goto out_unlock;
 
-	debug_activate(timer, expires);
-
 	new_base = get_target_base(base, timer->flags);
 
 	if (base != new_base) {
@@ -993,6 +991,8 @@ __mod_timer(struct timer_list *timer, unsigned long expires, bool pending_only)
 				   (timer->flags & ~TIMER_BASEMASK) | base->cpu);
 		}
 	}
+
+	debug_activate(timer, expires);
 
 	/* Try to forward a stale timer base clock */
 	forward_timer_base(base);
