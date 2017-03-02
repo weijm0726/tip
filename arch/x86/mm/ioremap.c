@@ -462,12 +462,31 @@ static bool memremap_is_setup_data(resource_size_t phys_addr,
 }
 
 /*
- * This function determines if an address should be mapped encrypted.
- * Boot setup data, EFI data and E820 areas are checked in making this
- * determination.
+ * This function determines if an address should be mapped encrypted when
+ * SEV is active.  E820 areas are checked in making this determination.
  */
-static bool memremap_should_map_encrypted(resource_size_t phys_addr,
-					  unsigned long size)
+static bool memremap_sev_should_map_encrypted(resource_size_t phys_addr,
+					      unsigned long size)
+{
+	/* Check if the address is in persistent memory */
+	switch (e820__get_entry_type(phys_addr, phys_addr + size - 1)) {
+	case E820_TYPE_PMEM:
+	case E820_TYPE_PRAM:
+		return false;
+	default:
+		break;
+	}
+
+	return true;
+}
+
+/*
+ * This function determines if an address should be mapped encrypted when
+ * SME is active.  Boot setup data, EFI data and E820 areas are checked in
+ * making this determination.
+ */
+static bool memremap_sme_should_map_encrypted(resource_size_t phys_addr,
+					      unsigned long size)
 {
 	/*
 	 * SME is not active, return true:
@@ -506,6 +525,13 @@ static bool memremap_should_map_encrypted(resource_size_t phys_addr,
 	}
 
 	return true;
+}
+
+static bool memremap_should_map_encrypted(resource_size_t phys_addr,
+					  unsigned long size)
+{
+	return sev_active() ? memremap_sev_should_map_encrypted(phys_addr, size)
+			    : memremap_sme_should_map_encrypted(phys_addr, size);
 }
 
 /*
