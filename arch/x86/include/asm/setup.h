@@ -63,6 +63,14 @@ static inline void x86_ce4100_early_setup(void) { }
 #include <asm/espfix.h>
 #include <linux/kernel.h>
 
+struct setup_data_attrs {
+	u64 paddr;
+	unsigned long size;
+};
+
+extern struct setup_data_attrs setup_data_list[];
+extern unsigned int setup_data_list_count;
+
 /*
  * This is set up by the setup-routine at boot-time
  */

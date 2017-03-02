@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/mmiotrace.h>
+#include <linux/efi.h>
 
 #include <asm/cacheflush.h>
 #include <asm/e820/api.h>
@@ -21,6 +22,7 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 #include <asm/pat.h>
+#include <asm/setup.h>
 
 #include "physaddr.h"
 
@@ -417,6 +419,115 @@ void unxlate_dev_mem_ptr(phys_addr_t phys, void *addr)
 		return;
 
 	iounmap((void __iomem *)((unsigned long)addr & PAGE_MASK));
+}
+
+/*
+ * Examine the physical address to determine if it is boot data. Check
+ * it against the boot params structure and EFI tables.
+ */
+static bool memremap_is_setup_data(resource_size_t phys_addr,
+				   unsigned long size)
+{
+	unsigned int i;
+	u64 paddr;
+
+	for (i = 0; i < setup_data_list_count; i++) {
+		if (phys_addr < setup_data_list[i].paddr)
+			continue;
+
+		if (phys_addr >= (setup_data_list[i].paddr +
+				  setup_data_list[i].size))
+			continue;
+
+		/* Address is within setup data range */
+		return true;
+	}
+
+	paddr = boot_params.efi_info.efi_memmap_hi;
+	paddr <<= 32;
+	paddr |= boot_params.efi_info.efi_memmap;
+	if (phys_addr == paddr)
+		return true;
+
+	paddr = boot_params.efi_info.efi_systab_hi;
+	paddr <<= 32;
+	paddr |= boot_params.efi_info.efi_systab;
+	if (phys_addr == paddr)
+		return true;
+
+	if (efi_table_address_match(phys_addr))
+		return true;
+
+	return false;
+}
+
+/*
+ * This function determines if an address should be mapped encrypted.
+ * Boot setup data, EFI data and E820 areas are checked in making this
+ * determination.
+ */
+static bool memremap_should_map_encrypted(resource_size_t phys_addr,
+					  unsigned long size)
+{
+	/*
+	 * SME is not active, return true:
+	 *   - For early_memremap_pgprot_adjust(), returning true or false
+	 *     results in the same protection value
+	 *   - For arch_memremap_do_ram_remap(), returning true will allow
+	 *     the RAM remap to occur instead of falling back to ioremap()
+	 */
+	if (!sme_active())
+		return true;
+
+	/* Check if the address is part of the setup data */
+	if (memremap_is_setup_data(phys_addr, size))
+		return false;
+
+	/* Check if the address is part of EFI boot/runtime data */
+	switch (efi_mem_type(phys_addr)) {
+	case EFI_BOOT_SERVICES_DATA:
+	case EFI_RUNTIME_SERVICES_DATA:
+		return false;
+	default:
+		break;
+	}
+
+	/* Check if the address is outside kernel usable area */
+	switch (e820__get_entry_type(phys_addr, phys_addr + size - 1)) {
+	case E820_TYPE_RESERVED:
+	case E820_TYPE_ACPI:
+	case E820_TYPE_NVS:
+	case E820_TYPE_UNUSABLE:
+		return false;
+	default:
+		break;
+	}
+
+	return true;
+}
+
+/*
+ * Architecure function to determine if RAM remap is allowed.
+ */
+bool arch_memremap_do_ram_remap(resource_size_t phys_addr, unsigned long size)
+{
+	return memremap_should_map_encrypted(phys_addr, size);
+}
+
+/*
+ * Architecure override of __weak function to adjust the protection attributes
+ * used when remapping memory.
+ */
+pgprot_t __init early_memremap_pgprot_adjust(resource_size_t phys_addr,
+					     unsigned long size,
+					     pgprot_t prot)
+{
+	if (memremap_should_map_encrypted(phys_addr, size))
+		prot = pgprot_encrypted(prot);
+	else
+		prot = pgprot_decrypted(prot);
+
+	return prot;
 }
 
 #ifdef CONFIG_ARCH_USE_MEMREMAP_PROT

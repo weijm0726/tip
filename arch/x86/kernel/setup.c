@@ -148,6 +148,9 @@ int default_check_phys_apicid_present(int phys_apicid)
 
 struct boot_params boot_params;
 
+struct setup_data_attrs setup_data_list[32];
+unsigned int setup_data_list_count;
+
 /*
  * Machine setup..
  */
@@ -419,6 +422,32 @@ static void __init reserve_initrd(void)
 }
 #endif /* CONFIG_BLK_DEV_INITRD */
 
+static void __init update_setup_data_list(u64 pa_data, unsigned long size)
+{
+	unsigned int i;
+
+	for (i = 0; i < setup_data_list_count; i++) {
+		if (setup_data_list[i].paddr != pa_data)
+			continue;
+
+		setup_data_list[i].size = size;
+		break;
+	}
+}
+
+static void __init add_to_setup_data_list(u64 pa_data, unsigned long size)
+{
+	if (!sme_active())
+		return;
+
+	if (!WARN(setup_data_list_count == ARRAY_SIZE(setup_data_list),
+		  "exceeded maximum setup data list slots")) {
+		setup_data_list[setup_data_list_count].paddr = pa_data;
+		setup_data_list[setup_data_list_count].size = size;
+		setup_data_list_count++;
+	}
+}
+
 static void __init parse_setup_data(void)
 {
 	struct setup_data *data;
@@ -428,11 +457,15 @@ static void __init parse_setup_data(void)
 	while (pa_data) {
 		u32 data_len, data_type;
 
+		add_to_setup_data_list(pa_data, sizeof(*data));
+
 		data = early_memremap(pa_data, sizeof(*data));
 		data_len = data->len + sizeof(struct setup_data);
 		data_type = data->type;
 		pa_next = data->next;
 		early_memunmap(data, sizeof(*data));
+
+		update_setup_data_list(pa_data, data_len);
 
 		switch (data_type) {
 		case SETUP_E820_EXT:
