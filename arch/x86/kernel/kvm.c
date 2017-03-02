@@ -75,8 +75,8 @@ static int parse_no_kvmclock_vsyscall(char *arg)
 
 early_param("no-kvmclock-vsyscall", parse_no_kvmclock_vsyscall);
 
-static DEFINE_PER_CPU(struct kvm_vcpu_pv_apf_data, apf_reason) __aligned(64);
-static DEFINE_PER_CPU(struct kvm_steal_time, steal_time) __aligned(64);
+static DEFINE_PER_CPU_HV_SHARED(struct kvm_vcpu_pv_apf_data, apf_reason) __aligned(64);
+static DEFINE_PER_CPU_HV_SHARED(struct kvm_steal_time, steal_time) __aligned(64);
 static int has_steal_clock = 0;
 
 /*
@@ -290,6 +290,22 @@ static void __init paravirt_ops_setup(void)
 #endif
 }
 
+static int kvm_map_percpu_hv_shared(void *addr, unsigned long size)
+{
+	/* When SEV is active, the percpu static variables initialized
+	 * in data section will contain the encrypted data so we first
+	 * need to decrypt it and then map it as decrypted.
+	 */
+	if (sev_active()) {
+		unsigned long pa = slow_virt_to_phys(addr);
+
+		sme_early_decrypt(pa, size);
+		return early_set_memory_decrypted(addr, size);
+	}
+
+	return 0;
+}
+
 static void kvm_register_steal_time(void)
 {
 	int cpu = smp_processor_id();
@@ -298,12 +314,17 @@ static void kvm_register_steal_time(void)
 	if (!has_steal_clock)
 		return;
 
+	if (kvm_map_percpu_hv_shared(st, sizeof(*st))) {
+		pr_err("kvm-stealtime: failed to map hv_shared percpu\n");
+		return;
+	}
+
 	wrmsrl(MSR_KVM_STEAL_TIME, (slow_virt_to_phys(st) | KVM_MSR_ENABLED));
 	pr_info("kvm-stealtime: cpu %d, msr %llx\n",
 		cpu, (unsigned long long) slow_virt_to_phys(st));
 }
 
-static DEFINE_PER_CPU(unsigned long, kvm_apic_eoi) = KVM_PV_EOI_DISABLED;
+static DEFINE_PER_CPU_HV_SHARED(unsigned long, kvm_apic_eoi) = KVM_PV_EOI_DISABLED;
 
 static notrace void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 {
@@ -327,25 +348,33 @@ static void kvm_guest_cpu_init(void)
 	if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF) && kvmapf) {
 		u64 pa = slow_virt_to_phys(this_cpu_ptr(&apf_reason));
 
+		if (kvm_map_percpu_hv_shared(this_cpu_ptr(&apf_reason),
+					sizeof(struct kvm_vcpu_pv_apf_data)))
+			goto skip_asyncpf;
 #ifdef CONFIG_PREEMPT
 		pa |= KVM_ASYNC_PF_SEND_ALWAYS;
 #endif
 		wrmsrl(MSR_KVM_ASYNC_PF_EN, pa | KVM_ASYNC_PF_ENABLED);
 		__this_cpu_write(apf_reason.enabled, 1);
-		printk(KERN_INFO"KVM setup async PF for cpu %d\n",
-		       smp_processor_id());
+		printk(KERN_INFO"KVM setup async PF for cpu %d msr %llx\n",
+		       smp_processor_id(), pa);
 	}
-
+skip_asyncpf:
 	if (kvm_para_has_feature(KVM_FEATURE_PV_EOI)) {
 		unsigned long pa;
 		/* Size alignment is implied but just to make it explicit. */
 		BUILD_BUG_ON(__alignof__(kvm_apic_eoi) < 4);
+		if (kvm_map_percpu_hv_shared(this_cpu_ptr(&kvm_apic_eoi),
+					sizeof(unsigned long)))
+			goto skip_pv_eoi;
 		__this_cpu_write(kvm_apic_eoi, 0);
 		pa = slow_virt_to_phys(this_cpu_ptr(&kvm_apic_eoi))
 			| KVM_MSR_ENABLED;
 		wrmsrl(MSR_KVM_PV_EOI_EN, pa);
+		printk(KERN_INFO"KVM setup PV EOI for cpu %d msr %lx\n",
+		       smp_processor_id(), pa);
 	}
-
+skip_pv_eoi:
 	if (has_steal_clock)
 		kvm_register_steal_time();
 }
