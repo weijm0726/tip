@@ -24,8 +24,7 @@
 struct ccp_device;
 struct ccp_cmd;
 
-#if defined(CONFIG_CRYPTO_DEV_CCP_DD) || \
-	defined(CONFIG_CRYPTO_DEV_CCP_DD_MODULE)
+#if defined(CONFIG_CRYPTO_DEV_CCP)
 
 /**
  * ccp_present - check if a CCP device is present

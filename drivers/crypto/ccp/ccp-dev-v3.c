@@ -315,6 +315,39 @@ static int ccp_perform_ecc(struct ccp_op *op)
 	return ccp_do_cmd(op, cr, ARRAY_SIZE(cr));
 }
 
+static irqreturn_t ccp_irq_handler(int irq, void *data)
+{
+	struct ccp_device *ccp = data;
+	struct ccp_cmd_queue *cmd_q;
+	u32 q_int, status;
+	unsigned int i;
+
+	status = ioread32(ccp->io_regs + IRQ_STATUS_REG);
+
+	for (i = 0; i < ccp->cmd_q_count; i++) {
+		cmd_q = &ccp->cmd_q[i];
+
+		q_int = status & (cmd_q->int_ok | cmd_q->int_err);
+		if (q_int) {
+			cmd_q->int_status = status;
+			cmd_q->q_status = ioread32(cmd_q->reg_status);
+			cmd_q->q_int_status = ioread32(cmd_q->reg_int_status);
+
+			/* On error, only save the first error value */
+			if ((q_int & cmd_q->int_err) && !cmd_q->cmd_error)
+				cmd_q->cmd_error = CMD_Q_ERROR(cmd_q->q_status);
+
+			cmd_q->int_rcvd = 1;
+
+			/* Acknowledge the interrupt and wake the kthread */
+			iowrite32(q_int, ccp->io_regs + IRQ_STATUS_REG);
+			wake_up_interruptible(&cmd_q->int_queue);
+		}
+	}
+
+	return IRQ_HANDLED;
+}
+
 static int ccp_init(struct ccp_device *ccp)
 {
 	struct device *dev = ccp->dev;
@@ -374,7 +407,7 @@ static int ccp_init(struct ccp_device *ccp)
 
 #ifdef CONFIG_ARM64
 		/* For arm64 set the recommended queue cache settings */
-		iowrite32(ccp->axcache, ccp->io_regs + CMD_Q_CACHE_BASE +
+		iowrite32(ccp->sp->axcache, ccp->io_regs + CMD_Q_CACHE_BASE +
 			  (CMD_Q_CACHE_INC * i));
 #endif
 
@@ -398,7 +431,7 @@ static int ccp_init(struct ccp_device *ccp)
 	iowrite32(qim, ccp->io_regs + IRQ_STATUS_REG);
 
 	/* Request an irq */
-	ret = ccp->get_irq(ccp);
+	ret = sp_request_ccp_irq(ccp->sp, ccp_irq_handler, ccp->name, ccp);
 	if (ret) {
 		dev_err(dev, "unable to allocate an IRQ\n");
 		goto e_pool;
@@ -450,7 +483,7 @@ e_kthread:
 		if (ccp->cmd_q[i].kthread)
 			kthread_stop(ccp->cmd_q[i].kthread);
 
-	ccp->free_irq(ccp);
+	sp_free_ccp_irq(ccp->sp, ccp);
 
 e_pool:
 	for (i = 0; i < ccp->cmd_q_count; i++)
@@ -496,7 +529,7 @@ static void ccp_destroy(struct ccp_device *ccp)
 		if (ccp->cmd_q[i].kthread)
 			kthread_stop(ccp->cmd_q[i].kthread);
 
-	ccp->free_irq(ccp);
+	sp_free_ccp_irq(ccp->sp, ccp);
 
 	for (i = 0; i < ccp->cmd_q_count; i++)
 		dma_pool_destroy(ccp->cmd_q[i].dma_pool);
@@ -516,40 +549,6 @@ static void ccp_destroy(struct ccp_device *ccp)
 	}
 }
 
-static irqreturn_t ccp_irq_handler(int irq, void *data)
-{
-	struct device *dev = data;
-	struct ccp_device *ccp = dev_get_drvdata(dev);
-	struct ccp_cmd_queue *cmd_q;
-	u32 q_int, status;
-	unsigned int i;
-
-	status = ioread32(ccp->io_regs + IRQ_STATUS_REG);
-
-	for (i = 0; i < ccp->cmd_q_count; i++) {
-		cmd_q = &ccp->cmd_q[i];
-
-		q_int = status & (cmd_q->int_ok | cmd_q->int_err);
-		if (q_int) {
-			cmd_q->int_status = status;
-			cmd_q->q_status = ioread32(cmd_q->reg_status);
-			cmd_q->q_int_status = ioread32(cmd_q->reg_int_status);
-
-			/* On error, only save the first error value */
-			if ((q_int & cmd_q->int_err) && !cmd_q->cmd_error)
-				cmd_q->cmd_error = CMD_Q_ERROR(cmd_q->q_status);
-
-			cmd_q->int_rcvd = 1;
-
-			/* Acknowledge the interrupt and wake the kthread */
-			iowrite32(q_int, ccp->io_regs + IRQ_STATUS_REG);
-			wake_up_interruptible(&cmd_q->int_queue);
-		}
-	}
-
-	return IRQ_HANDLED;
-}
-
 static const struct ccp_actions ccp3_actions = {
 	.aes = ccp_perform_aes,
 	.xts_aes = ccp_perform_xts_aes,
@@ -562,13 +561,18 @@ static const struct ccp_actions ccp3_actions = {
 	.init = ccp_init,
 	.destroy = ccp_destroy,
 	.get_free_slots = ccp_get_free_slots,
-	.irqhandler = ccp_irq_handler,
 };
 
-const struct ccp_vdata ccpv3 = {
+const struct ccp_vdata ccpv3_platform = {
 	.version = CCP_VERSION(3, 0),
 	.setup = NULL,
 	.perform = &ccp3_actions,
-	.bar = 2,
+	.offset = 0,
+};
+
+const struct ccp_vdata ccpv3_pci = {
+	.version = CCP_VERSION(3, 0),
+	.setup = NULL,
+	.perform = &ccp3_actions,
 	.offset = 0x20000,
 };
