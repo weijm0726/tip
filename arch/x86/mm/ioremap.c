@@ -498,6 +498,8 @@ static bool memremap_should_map_encrypted(resource_size_t phys_addr,
 	case E820_TYPE_ACPI:
 	case E820_TYPE_NVS:
 	case E820_TYPE_UNUSABLE:
+	case E820_TYPE_PMEM:
+	case E820_TYPE_PRAM:
 		return false;
 	default:
 		break;
