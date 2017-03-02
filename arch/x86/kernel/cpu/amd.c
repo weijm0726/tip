@@ -617,10 +617,13 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 		set_cpu_bug(c, X86_BUG_AMD_E400);
 
 	/*
-	 * BIOS support is required for SME. If BIOS has enabld SME then
-	 * adjust x86_phys_bits by the SME physical address space reduction
-	 * value. If BIOS has not enabled SME then don't advertise the
-	 * feature (set in scattered.c).
+	 * BIOS support is required for SME and SEV.
+	 *   For SME: If BIOS has enabled SME then adjust x86_phys_bits by
+	 *	      the SME physical address space reduction value.
+	 *	      If BIOS has not enabled SME then don't advertise the
+	 *	      SME feature (set in scattered.c).
+	 *   For SEV: If BIOS has not enabled SEV then don't advertise the
+	 *            SEV feature (set in scattered.c).
 	 */
 	if (c->extended_cpuid_level >= 0x8000001f) {
 		if (cpu_has(c, X86_FEATURE_SME)) {
@@ -636,6 +639,17 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 			} else {
 				clear_cpu_cap(c, X86_FEATURE_SME);
 			}
+		}
+
+		if (cpu_has(c, X86_FEATURE_SEV)) {
+			u64 syscfg, hwcr;
+
+			/* Check if SEV is enabled */
+			rdmsrl(MSR_K8_SYSCFG, syscfg);
+			rdmsrl(MSR_K7_HWCR, hwcr);
+			if (!(syscfg & MSR_K8_SYSCFG_MEM_ENCRYPT) ||
+			    !(hwcr & MSR_K7_HWCR_SMMLOCK))
+				clear_cpu_cap(c, X86_FEATURE_SEV);
 		}
 	}
 }
