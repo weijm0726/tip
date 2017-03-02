@@ -20,6 +20,7 @@ static void ident_pmd_init(struct x86_mapping_info *info, pmd_t *pmd_page,
 static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 			  unsigned long addr, unsigned long end)
 {
+	unsigned long kernpg_flag = info->kernpg_flag ? : _KERNPG_TABLE;
 	unsigned long next;
 
 	for (; addr < end; addr = next) {
@@ -39,7 +40,7 @@ static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 		if (!pmd)
 			return -ENOMEM;
 		ident_pmd_init(info, pmd, addr, next);
-		set_pud(pud, __pud(__pa(pmd) | _KERNPG_TABLE));
+		set_pud(pud, __pud(__pa(pmd) | kernpg_flag));
 	}
 
 	return 0;
@@ -48,6 +49,7 @@ static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 int kernel_ident_mapping_init(struct x86_mapping_info *info, pgd_t *pgd_page,
 			      unsigned long pstart, unsigned long pend)
 {
+	unsigned long kernpg_flag = info->kernpg_flag ? : _KERNPG_TABLE;
 	unsigned long addr = pstart + info->offset;
 	unsigned long end = pend + info->offset;
 	unsigned long next;
@@ -75,7 +77,7 @@ int kernel_ident_mapping_init(struct x86_mapping_info *info, pgd_t *pgd_page,
 		result = ident_pud_init(info, pud, addr, next);
 		if (result)
 			return result;
-		set_pgd(pgd, __pgd(__pa(pud) | _KERNPG_TABLE));
+		set_pgd(pgd, __pgd(__pa(pud) | kernpg_flag));
 	}
 
 	return 0;

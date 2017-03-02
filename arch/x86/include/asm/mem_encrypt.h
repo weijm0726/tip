@@ -64,6 +64,16 @@ static inline u64 sme_dma_mask(void)
 	return 0ULL;
 }
 
+static inline int set_memory_encrypted(unsigned long vaddr, int numpages)
+{
+	return 0;
+}
+
+static inline int set_memory_decrypted(unsigned long vaddr, int numpages)
+{
+	return 0;
+}
+
 #endif
 
 static inline void __init sme_early_encrypt(resource_size_t paddr,

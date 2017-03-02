@@ -1742,6 +1742,7 @@ int set_memory_4k(unsigned long addr, int numpages)
 					__pgprot(0), 1, 0, NULL);
 }
 
+#ifdef CONFIG_AMD_MEM_ENCRYPT
 static int __set_memory_enc_dec(unsigned long addr, int numpages, bool enc)
 {
 	struct cpa_data cpa;
@@ -1807,6 +1808,7 @@ int set_memory_decrypted(unsigned long addr, int numpages)
 	return __set_memory_enc_dec(addr, numpages, false);
 }
 EXPORT_SYMBOL(set_memory_decrypted);
+#endif	/* CONFIG_AMD_MEM_ENCRYPT */
 
 int set_pages_uc(struct page *page, int numpages)
 {

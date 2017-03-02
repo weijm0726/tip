@@ -279,8 +279,43 @@ bool xen_set_default_idle(void)
 	return ret;
 }
 #endif
-void stop_this_cpu(void *dummy)
+
+static bool is_smt_thread(int cpu)
 {
+#ifdef CONFIG_SCHED_SMT
+	if (cpumask_test_cpu(smp_processor_id(), cpu_smt_mask(cpu)))
+		return true;
+#endif
+	return false;
+}
+
+void stop_this_cpu(void *data)
+{
+	atomic_t *stopping_cpu = data;
+	bool do_cache_disable = false;
+	bool do_wbinvd = false;
+
+	if (stopping_cpu) {
+		int stopping_id = atomic_read(stopping_cpu);
+		struct cpuinfo_x86 *c = &cpu_data(stopping_id);
+
+		/*
+		 * If the processor supports SME then we need to clear
+		 * out cache information before halting it because we could
+		 * be performing a kexec. With kexec, going from SME
+		 * inactive to SME active requires clearing cache entries
+		 * so that addresses without the encryption bit set don't
+		 * corrupt the same physical address that has the encryption
+		 * bit set when caches are flushed. If this is not an SMT
+		 * thread of the stopping CPU then we disable caching at this
+		 * point to keep the cache clean.
+		 */
+		if (cpu_has(c, X86_FEATURE_SME)) {
+			do_cache_disable = !is_smt_thread(stopping_id);
+			do_wbinvd = true;
+		}
+	}
+
 	local_irq_disable();
 	/*
 	 * Remove this CPU:
@@ -288,6 +323,12 @@ void stop_this_cpu(void *dummy)
 	set_cpu_online(smp_processor_id(), false);
 	disable_local_APIC();
 	mcheck_cpu_clear(this_cpu_ptr(&cpu_info));
+
+	if (do_cache_disable)
+		write_cr0(read_cr0() | X86_CR0_CD);
+
+	if (do_wbinvd)
+		wbinvd();
 
 	for (;;)
 		halt();

@@ -38,6 +38,7 @@
 #include <linux/syscore_ops.h>
 #include <linux/compiler.h>
 #include <linux/hugetlb.h>
+#include <linux/mem_encrypt.h>
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -315,6 +316,18 @@ static struct page *kimage_alloc_pages(gfp_t gfp_mask, unsigned int order)
 		count = 1 << order;
 		for (i = 0; i < count; i++)
 			SetPageReserved(pages + i);
+
+		/*
+		 * If SME is active we need to be sure that kexec pages are
+		 * not encrypted because when we boot to the new kernel the
+		 * pages won't be accessed encrypted (initially).
+		 */
+		if (sme_active()) {
+			void *vaddr = page_address(pages);
+
+			set_memory_decrypted((unsigned long)vaddr, count);
+			memset(vaddr, 0, count * PAGE_SIZE);
+		}
 	}
 
 	return pages;
@@ -326,6 +339,17 @@ static void kimage_free_pages(struct page *page)
 
 	order = page_private(page);
 	count = 1 << order;
+
+	/*
+	 * If SME is active we need to reset the pages back to being an
+	 * encrypted mapping before freeing them.
+	 */
+	if (sme_active()) {
+		void *vaddr = page_address(page);
+
+		set_memory_encrypted((unsigned long)vaddr, count);
+	}
+
 	for (i = 0; i < count; i++)
 		ClearPageReserved(page + i);
 	__free_pages(page, order);
