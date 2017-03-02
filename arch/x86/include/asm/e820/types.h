@@ -7,6 +7,8 @@
  * These are the E820 types known to the kernel:
  */
 enum e820_type {
+	E820_TYPE_INVALID	= 0,
+
 	E820_TYPE_RAM		= 1,
 	E820_TYPE_RESERVED	= 2,
 	E820_TYPE_ACPI		= 3,
