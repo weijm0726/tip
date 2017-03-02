@@ -1037,7 +1037,7 @@ u32 efi_mem_type(unsigned long phys_addr)
 	efi_memory_desc_t *md;
 
 	if (!efi_enabled(EFI_MEMMAP))
-		return 0;
+		return EFI_RESERVED_TYPE;
 
 	for_each_efi_memory_desc(md) {
 		if ((md->phys_addr <= phys_addr) &&
@@ -1045,7 +1045,7 @@ u32 efi_mem_type(unsigned long phys_addr)
 				  (md->num_pages << EFI_PAGE_SHIFT))))
 			return md->type;
 	}
-	return 0;
+	return EFI_RESERVED_TYPE;
 }
 
 static int __init arch_parse_efi_cmdline(char *str)
