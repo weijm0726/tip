@@ -26,6 +26,11 @@ static inline bool sme_active(void)
 	return (sme_me_mask) ? true : false;
 }
 
+static inline u64 sme_dma_mask(void)
+{
+	return ((u64)sme_me_mask << 1) - 1;
+}
+
 void __init sme_early_encrypt(resource_size_t paddr,
 			      unsigned long size);
 void __init sme_early_decrypt(resource_size_t paddr,
@@ -53,6 +58,12 @@ static inline bool sme_active(void)
 {
 	return false;
 }
+
+static inline u64 sme_dma_mask(void)
+{
+	return 0ULL;
+}
+
 #endif
 
 static inline void __init sme_early_encrypt(resource_size_t paddr,
