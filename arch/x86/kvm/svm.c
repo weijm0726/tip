@@ -46,6 +46,7 @@
 #include <asm/irq_remapping.h>
 
 #include <asm/virtext.h>
+#include <asm/mem_encrypt.h>
 #include "trace.h"
 
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
@@ -5005,9 +5006,26 @@ static void svm_cpuid_update(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct kvm_cpuid_entry2 *entry;
+	struct vmcb_control_area *ca = &svm->vmcb->control;
+	struct kvm_cpuid_entry2 *features, *sev_info;
 
 	/* Update nrips enabled cache */
 	svm->nrips_enabled = !!guest_cpuid_has_nrips(&svm->vcpu);
+
+	/* Check for Secure Encrypted Virtualization support */
+	features = kvm_find_cpuid_entry(vcpu, KVM_CPUID_FEATURES, 0);
+	if (!features)
+		return;
+
+	sev_info = kvm_find_cpuid_entry(vcpu, 0x8000001f, 0);
+	if (!sev_info)
+		return;
+
+	if (ca->nested_ctl & SVM_NESTED_CTL_SEV_ENABLE) {
+		features->eax |= (1 << KVM_FEATURE_SEV);
+		cpuid(0x8000001f, &sev_info->eax, &sev_info->ebx,
+		      &sev_info->ecx, &sev_info->edx);
+	}
 
 	if (!kvm_vcpu_apicv_active(vcpu))
 		return;
