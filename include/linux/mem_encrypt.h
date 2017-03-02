@@ -23,6 +23,7 @@
 
 #ifndef sme_me_mask
 #define sme_me_mask	0UL
+#define sev_enabled	0
 
 static inline bool sme_active(void)
 {
@@ -32,6 +33,11 @@ static inline bool sme_active(void)
 static inline u64 sme_dma_mask(void)
 {
 	return 0ULL;
+}
+
+static inline bool sev_active(void)
+{
+	return false;
 }
 
 static inline int set_memory_encrypted(unsigned long vaddr, int numpages)

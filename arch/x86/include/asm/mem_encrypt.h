@@ -20,10 +20,16 @@
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 
 extern unsigned long sme_me_mask;
+extern unsigned int sev_enabled;
 
 static inline bool sme_active(void)
 {
-	return (sme_me_mask) ? true : false;
+	return (sme_me_mask && !sev_enabled) ? true : false;
+}
+
+static inline bool sev_active(void)
+{
+	return (sme_me_mask && sev_enabled) ? true : false;
 }
 
 static inline u64 sme_dma_mask(void)
@@ -53,6 +59,7 @@ void swiotlb_set_mem_attributes(void *vaddr, unsigned long size);
 
 #ifndef sme_me_mask
 #define sme_me_mask	0UL
+#define sev_enabled	0
 
 static inline bool sme_active(void)
 {
@@ -62,6 +69,11 @@ static inline bool sme_active(void)
 static inline u64 sme_dma_mask(void)
 {
 	return 0ULL;
+}
+
+static inline bool sev_active(void)
+{
+	return false;
 }
 
 static inline int set_memory_encrypted(unsigned long vaddr, int numpages)
