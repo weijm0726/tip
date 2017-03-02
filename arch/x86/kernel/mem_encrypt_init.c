@@ -19,6 +19,12 @@
 #include <linux/mm.h>
 
 #include <asm/sections.h>
+#include <asm/processor-flags.h>
+#include <asm/msr.h>
+#include <asm/cmdline.h>
+
+static char sme_cmdline_arg_on[] __initdata = "mem_encrypt=on";
+static char sme_cmdline_arg_off[] __initdata = "mem_encrypt=off";
 
 extern void sme_encrypt_execute(unsigned long, unsigned long, unsigned long,
 				void *, pgd_t *);
@@ -217,8 +223,71 @@ unsigned long __init sme_get_me_mask(void)
 	return sme_me_mask;
 }
 
-unsigned long __init sme_enable(void)
+unsigned long __init sme_enable(void *boot_data)
 {
+	struct boot_params *bp = boot_data;
+	unsigned int eax, ebx, ecx, edx;
+	unsigned long cmdline_ptr;
+	bool enable_if_found;
+	void *cmdline_arg;
+	u64 msr;
+
+	/* Check for an AMD processor */
+	eax = 0;
+	ecx = 0;
+	native_cpuid(&eax, &ebx, &ecx, &edx);
+	if ((ebx != 0x68747541) || (edx != 0x69746e65) || (ecx != 0x444d4163))
+		goto out;
+
+	/* Check for the SME support leaf */
+	eax = 0x80000000;
+	ecx = 0;
+	native_cpuid(&eax, &ebx, &ecx, &edx);
+	if (eax < 0x8000001f)
+		goto out;
+
+	/*
+	 * Check for the SME feature:
+	 *   CPUID Fn8000_001F[EAX] - Bit 0
+	 *     Secure Memory Encryption support
+	 *   CPUID Fn8000_001F[EBX] - Bits 5:0
+	 *     Pagetable bit position used to indicate encryption
+	 */
+	eax = 0x8000001f;
+	ecx = 0;
+	native_cpuid(&eax, &ebx, &ecx, &edx);
+	if (!(eax & 1))
+		goto out;
+
+	/* Check if SME is enabled */
+	msr = native_read_msr(MSR_K8_SYSCFG);
+	if (!(msr & MSR_K8_SYSCFG_MEM_ENCRYPT))
+		goto out;
+
+	/*
+	 * Fixups have not been to applied phys_base yet, so we must obtain
+	 * the address to the SME command line option in the following way.
+	 */
+	if (IS_ENABLED(CONFIG_AMD_MEM_ENCRYPT_ACTIVE_BY_DEFAULT)) {
+		asm ("lea sme_cmdline_arg_off(%%rip), %0"
+		     : "=r" (cmdline_arg)
+		     : "p" (sme_cmdline_arg_off));
+		enable_if_found = false;
+	} else {
+		asm ("lea sme_cmdline_arg_on(%%rip), %0"
+		     : "=r" (cmdline_arg)
+		     : "p" (sme_cmdline_arg_on));
+		enable_if_found = true;
+	}
+
+	cmdline_ptr = bp->hdr.cmd_line_ptr | ((u64)bp->ext_cmd_line_ptr << 32);
+
+	if (cmdline_find_option_bool((char *)cmdline_ptr, cmdline_arg))
+		sme_me_mask = enable_if_found ? 1UL << (ebx & 0x3f) : 0;
+	else
+		sme_me_mask = enable_if_found ? 0 : 1UL << (ebx & 0x3f);
+
+out:
 	return sme_me_mask;
 }
 
