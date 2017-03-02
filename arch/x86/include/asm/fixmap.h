@@ -153,6 +153,13 @@ static inline void __set_fixmap(enum fixed_addresses idx,
 }
 #endif
 
+/*
+ * Fixmap settings used with memory encryption
+ *   - FIXMAP_PAGE_NOCACHE is used for MMIO so make sure the memory
+ *     encryption mask is not part of the page attributes
+ */
+#define FIXMAP_PAGE_NOCACHE PAGE_KERNEL_IO_NOCACHE
+
 #include <asm-generic/fixmap.h>
 
 #define __late_set_fixmap(idx, phys, flags) __set_fixmap(idx, phys, flags)

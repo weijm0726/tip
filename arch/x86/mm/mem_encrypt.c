@@ -11,6 +11,10 @@
  */
 
 #include <linux/linkage.h>
+#include <linux/init.h>
+#include <linux/mm.h>
+
+extern pmdval_t early_pmd_flags;
 
 /*
  * Since SME related variables are set early in the boot process they must
@@ -19,3 +23,19 @@
  */
 unsigned long sme_me_mask __section(.data) = 0;
 EXPORT_SYMBOL_GPL(sme_me_mask);
+
+void __init sme_early_init(void)
+{
+	unsigned int i;
+
+	if (!sme_me_mask)
+		return;
+
+	early_pmd_flags |= sme_me_mask;
+
+	__supported_pte_mask |= sme_me_mask;
+
+	/* Update the protection map with memory encryption mask */
+	for (i = 0; i < ARRAY_SIZE(protection_map); i++)
+		protection_map[i] = pgprot_encrypted(protection_map[i]);
+}

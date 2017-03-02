@@ -15,6 +15,8 @@
 
 #ifndef __ASSEMBLY__
 
+#include <linux/init.h>
+
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 
 extern unsigned long sme_me_mask;
@@ -23,6 +25,11 @@ static inline bool sme_active(void)
 {
 	return (sme_me_mask) ? true : false;
 }
+
+void __init sme_early_init(void);
+
+#define __sme_pa(x)		(__pa((x)) | sme_me_mask)
+#define __sme_pa_nodebug(x)	(__pa_nodebug((x)) | sme_me_mask)
 
 #else	/* !CONFIG_AMD_MEM_ENCRYPT */
 
@@ -34,6 +41,13 @@ static inline bool sme_active(void)
 	return false;
 }
 #endif
+
+static inline void __init sme_early_init(void)
+{
+}
+
+#define __sme_pa		__pa
+#define __sme_pa_nodebug	__pa_nodebug
 
 #endif	/* CONFIG_AMD_MEM_ENCRYPT */
 
