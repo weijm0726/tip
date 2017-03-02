@@ -38,6 +38,8 @@
 #include <linux/hashtable.h>
 #include <linux/psp-sev.h>
 #include <linux/file.h>
+#include <linux/pagemap.h>
+#include <linux/swap.h>
 
 #include <asm/apic.h>
 #include <asm/perf_event.h>
@@ -502,6 +504,7 @@ static void sev_deactivate_handle(struct kvm *kvm);
 static void sev_decommission_handle(struct kvm *kvm);
 static int sev_asid_new(void);
 static void sev_asid_free(int asid);
+#define __sev_page_pa(x) ((page_to_pfn(x) << PAGE_SHIFT) | sme_me_mask)
 
 static bool kvm_sev_enabled(void)
 {
@@ -5775,6 +5778,149 @@ err_1:
 	return ret;
 }
 
+static struct page **sev_pin_memory(unsigned long uaddr, unsigned long ulen,
+				    unsigned long *n)
+{
+	struct page **pages;
+	int first, last;
+	unsigned long npages, pinned;
+
+	/* Get number of pages */
+	first = (uaddr & PAGE_MASK) >> PAGE_SHIFT;
+	last = ((uaddr + ulen - 1) & PAGE_MASK) >> PAGE_SHIFT;
+	npages = (last - first + 1);
+
+	pages = kzalloc(npages * sizeof(struct page *), GFP_KERNEL);
+	if (!pages)
+		return NULL;
+
+	/* pin the user virtual address */
+	down_read(&current->mm->mmap_sem);
+	pinned = get_user_pages_fast(uaddr, npages, 1, pages);
+	up_read(&current->mm->mmap_sem);
+	if (pinned != npages) {
+		printk(KERN_ERR "SEV: failed to pin  %ld pages (got %ld)\n",
+				npages, pinned);
+		goto err;
+	}
+
+	*n = npages;
+	return pages;
+err:
+	if (pinned > 0)
+		release_pages(pages, pinned, 0);
+	kfree(pages);
+
+	return NULL;
+}
+
+static void sev_unpin_memory(struct page **pages, unsigned long npages)
+{
+	release_pages(pages, npages, 0);
+	kfree(pages);
+}
+
+static void sev_clflush_pages(struct page *pages[], int num_pages)
+{
+	unsigned long i;
+	uint8_t *page_virtual;
+
+	if (num_pages == 0 || pages == NULL)
+		return;
+
+	for (i = 0; i < num_pages; i++) {
+		page_virtual = kmap_atomic(pages[i]);
+		clflush_cache_range(page_virtual, PAGE_SIZE);
+		kunmap_atomic(page_virtual);
+	}
+}
+
+static int sev_launch_update_data(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct page **inpages;
+	unsigned long uaddr, ulen;
+	int i, len, ret, offset;
+	unsigned long nr_pages;
+	struct kvm_sev_launch_update_data params;
+	struct sev_data_launch_update_data *data;
+
+	if (!sev_guest(kvm))
+		return -EINVAL;
+
+	/* Get the parameters from the user */
+	ret = -EFAULT;
+	if (copy_from_user(&params, (void *)argp->data,
+			sizeof(struct kvm_sev_launch_update_data)))
+		goto err_1;
+
+	uaddr = params.address;
+	ulen = params.length;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		ret = -ENOMEM;
+		goto err_1;
+	}
+
+	/* pin user pages */
+	inpages = sev_pin_memory(params.address, params.length, &nr_pages);
+	if (!inpages) {
+		ret = -ENOMEM;
+		goto err_2;
+	}
+
+	/* invalidate the cache line for these pages to ensure that DRAM
+	 * has recent content before calling the SEV commands to perform
+	 * the encryption.
+	 */
+	sev_clflush_pages(inpages, nr_pages);
+
+	/* the array of pages returned by get_user_pages() is a page-aligned
+	 * memory. Since the user buffer is probably not page-aligned, we need
+	 * to calculate the offset within a page for first update entry.
+	 */
+	offset = uaddr & (PAGE_SIZE - 1);
+	len = min_t(size_t, (PAGE_SIZE - offset), ulen);
+	ulen -= len;
+
+	/* update first page -
+	 * special care need to be taken for the first page because we might
+	 * be dealing with offset within the page
+	 */
+	data->handle = sev_get_handle(kvm);
+	data->length = len;
+	data->address = __sev_page_pa(inpages[0]) + offset;
+	ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_UPDATE_DATA,
+			data, &argp->error);
+	if (ret)
+		goto err_3;
+
+	/* update remaining pages */
+	for (i = 1; i < nr_pages; i++) {
+
+		len = min_t(size_t, PAGE_SIZE, ulen);
+		ulen -= len;
+		data->length = len;
+		data->address = __sev_page_pa(inpages[i]);
+		ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_UPDATE_DATA,
+					data, &argp->error);
+		if (ret)
+			goto err_3;
+	}
+
+	/* mark pages dirty */
+	for (i = 0; i < nr_pages; i++) {
+		set_page_dirty_lock(inpages[i]);
+		mark_page_accessed(inpages[i]);
+	}
+err_3:
+	sev_unpin_memory(inpages, nr_pages);
+err_2:
+	kfree(data);
+err_1:
+	return ret;
+}
+
 static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 {
 	int r = -ENOTTY;
@@ -5788,6 +5934,10 @@ static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 	switch (sev_cmd.id) {
 	case KVM_SEV_LAUNCH_START: {
 		r = sev_launch_start(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_LAUNCH_UPDATE_DATA: {
+		r = sev_launch_update_data(kvm, &sev_cmd);
 		break;
 	}
 	default:
