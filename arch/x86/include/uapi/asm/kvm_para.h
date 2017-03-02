@@ -26,6 +26,8 @@
 #define KVM_FEATURE_PV_UNHALT		7
 #define KVM_FEATURE_SEV			8
 
+#ifndef __ASSEMBLY__
+
 /* The last 8 bits are used to indicate how to interpret the flags field
  * in pvclock structure. If no bits are set, all flags are ignored.
  */
@@ -100,5 +102,6 @@ struct kvm_vcpu_pv_apf_data {
 #define KVM_PV_EOI_ENABLED KVM_PV_EOI_MASK
 #define KVM_PV_EOI_DISABLED 0x0
 
+#endif	/* __ASSEMBLY__ */
 
 #endif /* _UAPI_ASM_X86_KVM_PARA_H */

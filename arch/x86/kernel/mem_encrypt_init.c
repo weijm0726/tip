@@ -22,6 +22,7 @@
 #include <asm/processor-flags.h>
 #include <asm/msr.h>
 #include <asm/cmdline.h>
+#include <asm/kvm_para.h>
 
 static char sme_cmdline_arg_on[] __initdata = "mem_encrypt=on";
 static char sme_cmdline_arg_off[] __initdata = "mem_encrypt=off";
@@ -231,6 +232,29 @@ unsigned long __init sme_enable(void *boot_data)
 	bool enable_if_found;
 	void *cmdline_arg;
 	u64 msr;
+
+	/* Check if running under a hypervisor */
+	eax = 0x40000000;
+	ecx = 0;
+	native_cpuid(&eax, &ebx, &ecx, &edx);
+	if (eax > 0x40000000) {
+		eax = 0x40000001;
+		ecx = 0;
+		native_cpuid(&eax, &ebx, &ecx, &edx);
+		if (!(eax & BIT(KVM_FEATURE_SEV)))
+			goto out;
+
+		eax = 0x8000001f;
+		ecx = 0;
+		native_cpuid(&eax, &ebx, &ecx, &edx);
+		if (!(eax & 1))
+			goto out;
+
+		sme_me_mask = 1UL << (ebx & 0x3f);
+		sev_enabled = 1;
+
+		goto out;
+	}
 
 	/* Check for an AMD processor */
 	eax = 0;
