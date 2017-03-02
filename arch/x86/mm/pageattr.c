@@ -14,6 +14,7 @@
 #include <linux/gfp.h>
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
+#include <linux/memblock.h>
 
 #include <asm/e820/api.h>
 #include <asm/processor.h>
@@ -37,6 +38,7 @@ struct cpa_data {
 	int		flags;
 	unsigned long	pfn;
 	unsigned	force_split : 1;
+	unsigned	force_memblock :1;
 	int		curpage;
 	struct page	**pages;
 };
@@ -627,9 +629,8 @@ out_unlock:
 
 static int
 __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
-		   struct page *base)
+		  pte_t *pbase, unsigned long new_pfn)
 {
-	pte_t *pbase = (pte_t *)page_address(base);
 	unsigned long ref_pfn, pfn, pfninc = 1;
 	unsigned int i, level;
 	pte_t *tmp;
@@ -646,7 +647,7 @@ __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
 		return 1;
 	}
 
-	paravirt_alloc_pte(&init_mm, page_to_pfn(base));
+	paravirt_alloc_pte(&init_mm, new_pfn);
 
 	switch (level) {
 	case PG_LEVEL_2M:
@@ -707,7 +708,8 @@ __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
 	 * pagetable protections, the actual ptes set above control the
 	 * primary protection behavior:
 	 */
-	__set_pmd_pte(kpte, address, mk_pte(base, __pgprot(_KERNPG_TABLE)));
+	__set_pmd_pte(kpte, address,
+		native_make_pte((new_pfn << PAGE_SHIFT) + _KERNPG_TABLE));
 
 	/*
 	 * Intel Atom errata AAH41 workaround.
@@ -723,21 +725,50 @@ __split_large_page(struct cpa_data *cpa, pte_t *kpte, unsigned long address,
 	return 0;
 }
 
+static pte_t *try_alloc_pte(struct cpa_data *cpa, unsigned long *pfn)
+{
+	unsigned long phys;
+	struct page *base;
+
+	if (cpa->force_memblock) {
+		phys = memblock_alloc(PAGE_SIZE, PAGE_SIZE);
+		if (!phys)
+			return NULL;
+		*pfn = phys >> PAGE_SHIFT;
+		return (pte_t *)__va(phys);
+	}
+
+	base = alloc_pages(GFP_KERNEL | __GFP_NOTRACK, 0);
+	if (!base)
+		return NULL;
+	*pfn = page_to_pfn(base);
+	return (pte_t *)page_address(base);
+}
+
+static void try_free_pte(struct cpa_data *cpa, pte_t *pte)
+{
+	if (cpa->force_memblock)
+		memblock_free(__pa(pte), PAGE_SIZE);
+	else
+		__free_page((struct page *)pte);
+}
+
 static int split_large_page(struct cpa_data *cpa, pte_t *kpte,
 			    unsigned long address)
 {
-	struct page *base;
+	pte_t *new_pte;
+	unsigned long new_pfn;
 
 	if (!debug_pagealloc_enabled())
 		spin_unlock(&cpa_lock);
-	base = alloc_pages(GFP_KERNEL | __GFP_NOTRACK, 0);
+	new_pte = try_alloc_pte(cpa, &new_pfn);
 	if (!debug_pagealloc_enabled())
 		spin_lock(&cpa_lock);
-	if (!base)
+	if (!new_pte)
 		return -ENOMEM;
 
-	if (__split_large_page(cpa, kpte, address, base))
-		__free_page(base);
+	if (__split_large_page(cpa, kpte, address, new_pte, new_pfn))
+		try_free_pte(cpa, new_pte);
 
 	return 0;
 }
@@ -2035,6 +2066,7 @@ int kernel_map_pages_in_pgd(pgd_t *pgd, u64 pfn, unsigned long address,
 			    unsigned numpages, unsigned long page_flags)
 {
 	int retval = -EINVAL;
+	int use_memblock = !slab_is_available();
 
 	struct cpa_data cpa = {
 		.vaddr = &address,
@@ -2044,6 +2076,7 @@ int kernel_map_pages_in_pgd(pgd_t *pgd, u64 pfn, unsigned long address,
 		.mask_set = __pgprot(0),
 		.mask_clr = __pgprot(0),
 		.flags = 0,
+		.force_memblock = use_memblock,
 	};
 
 	if (!(__supported_pte_mask & _PAGE_NX))
