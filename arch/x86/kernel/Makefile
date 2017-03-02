@@ -142,4 +142,5 @@ ifeq ($(CONFIG_X86_64),y)
 	obj-y				+= vsmp_64.o
 
 	obj-y				+= mem_encrypt_init.o
+	obj-$(CONFIG_AMD_MEM_ENCRYPT)	+= mem_encrypt_boot.o
 endif
