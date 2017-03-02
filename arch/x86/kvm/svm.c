@@ -6058,6 +6058,89 @@ err_1:
 	return ret;
 }
 
+static int sev_dbg_encrypt(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	void *data;
+	int len, ret, d_off;
+	struct page **inpages;
+	struct kvm_sev_dbg debug;
+	struct sev_data_dbg *encrypt;
+	unsigned long src_addr, dst_addr, npages;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	if (copy_from_user(&debug, argp, sizeof(*argp)))
+		return -EFAULT;
+
+	if (debug.length > PAGE_SIZE)
+		return -EINVAL;
+
+	len = debug.length;
+	src_addr = debug.src_addr;
+	dst_addr = debug.dst_addr;
+
+	inpages = sev_pin_memory(dst_addr, PAGE_SIZE, &npages);
+	if (!inpages)
+		return -EFAULT;
+
+	encrypt = kzalloc(sizeof(*encrypt), GFP_KERNEL);
+	if (!encrypt) {
+		ret = -ENOMEM;
+		goto err_1;
+	}
+
+	data = (void *) get_zeroed_page(GFP_KERNEL);
+	if (!data) {
+		ret = -ENOMEM;
+		goto err_2;
+	}
+
+	if ((len & 15) || (dst_addr & 15)) {
+		/* if destination address and length are not 16-byte
+		 * aligned then:
+		 * a) decrypt destination page into temporary buffer
+		 * b) copy source data into temporary buffer at correct offset
+		 * c) encrypt temporary buffer
+		 */
+		ret = __sev_dbg_decrypt_page(kvm, dst_addr, data, &argp->error);
+		if (ret)
+			goto err_3;
+		d_off = dst_addr & (PAGE_SIZE - 1);
+
+		if (copy_from_user(data + d_off,
+					(uint8_t *)debug.src_addr, len)) {
+			ret = -EFAULT;
+			goto err_3;
+		}
+
+		encrypt->length = PAGE_SIZE;
+		encrypt->src_addr = __psp_pa(data);
+		encrypt->dst_addr =  __sev_page_pa(inpages[0]);
+	} else {
+		if (copy_from_user(data, (uint8_t *)debug.src_addr, len)) {
+			ret = -EFAULT;
+			goto err_3;
+		}
+
+		d_off = dst_addr & (PAGE_SIZE - 1);
+		encrypt->length = len;
+		encrypt->src_addr = __psp_pa(data);
+		encrypt->dst_addr = __sev_page_pa(inpages[0]);
+		encrypt->dst_addr += d_off;
+	}
+
+	encrypt->handle = sev_get_handle(kvm);
+	ret = sev_issue_cmd(kvm, SEV_CMD_DBG_ENCRYPT, encrypt, &argp->error);
+err_3:
+	free_page((unsigned long)data);
+err_2:
+	kfree(encrypt);
+err_1:
+	sev_unpin_memory(inpages, npages);
+	return ret;
+}
+
 static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 {
 	int r = -ENOTTY;
@@ -6087,6 +6170,10 @@ static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_DBG_DECRYPT: {
 		r = sev_dbg_decrypt(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_DBG_ENCRYPT: {
+		r = sev_dbg_encrypt(kvm, &sev_cmd);
 		break;
 	}
 	default:
