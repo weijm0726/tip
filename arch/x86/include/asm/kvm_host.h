@@ -723,6 +723,7 @@ struct kvm_sev_info {
 	unsigned int handle;	/* firmware handle */
 	unsigned int asid;	/* asid for this guest */
 	int sev_fd;		/* SEV device fd */
+	struct list_head pinned_memory_slot;
 };
 
 struct kvm_arch {
@@ -1043,6 +1044,11 @@ struct kvm_x86_ops {
 	void (*setup_mce)(struct kvm_vcpu *vcpu);
 
 	int (*memory_encryption_op)(struct kvm *kvm, void __user *argp);
+
+	void (*prepare_memory_region)(struct kvm *kvm,
+			struct kvm_memory_slot *memslot,
+			const struct kvm_userspace_memory_region *mem,
+			enum kvm_mr_change change);
 };
 
 struct kvm_arch_async_pf {

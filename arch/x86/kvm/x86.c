@@ -8195,6 +8195,9 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 				const struct kvm_userspace_memory_region *mem,
 				enum kvm_mr_change change)
 {
+	if (kvm_x86_ops->prepare_memory_region)
+		kvm_x86_ops->prepare_memory_region(kvm, memslot, mem, change);
+
 	return 0;
 }
 

@@ -498,12 +498,21 @@ static inline bool gif_set(struct vcpu_svm *svm)
 }
 
 /* Secure Encrypted Virtualization */
+struct kvm_sev_pinned_memory_slot {
+	struct list_head list;
+	unsigned long npages;
+	struct page **pages;
+	unsigned long userspace_addr;
+	short id;
+};
+
 static unsigned int max_sev_asid;
 static unsigned long *sev_asid_bitmap;
 static void sev_deactivate_handle(struct kvm *kvm);
 static void sev_decommission_handle(struct kvm *kvm);
 static int sev_asid_new(void);
 static void sev_asid_free(int asid);
+static void sev_unpin_memory(struct page **pages, unsigned long npages);
 #define __sev_page_pa(x) ((page_to_pfn(x) << PAGE_SHIFT) | sme_me_mask)
 
 static bool kvm_sev_enabled(void)
@@ -1544,8 +1553,24 @@ static inline int avic_free_vm_id(int id)
 
 static void sev_vm_destroy(struct kvm *kvm)
 {
+	struct list_head *pos, *q;
+	struct kvm_sev_pinned_memory_slot *pinned_slot;
+	struct list_head *head = &kvm->arch.sev_info.pinned_memory_slot;
+
 	if (!sev_guest(kvm))
 		return;
+
+	/* if guest memory is pinned then unpin it now */
+	if (!list_empty(head)) {
+		list_for_each_safe(pos, q, head) {
+			pinned_slot = list_entry(pos,
+				struct kvm_sev_pinned_memory_slot, list);
+			sev_unpin_memory(pinned_slot->pages,
+					pinned_slot->npages);
+			list_del(pos);
+			kfree(pinned_slot);
+		}
+	}
 
 	/* release the firmware resources */
 	sev_deactivate_handle(kvm);
@@ -5663,6 +5688,8 @@ static int sev_pre_start(struct kvm *kvm, int *asid)
 		}
 		*asid = ret;
 		ret = 0;
+
+		INIT_LIST_HEAD(&kvm->arch.sev_info.pinned_memory_slot);
 	}
 
 	return ret;
@@ -6189,6 +6216,71 @@ err_1:
 	return ret;
 }
 
+static struct kvm_sev_pinned_memory_slot *sev_find_pinned_memory_slot(
+		struct kvm *kvm, struct kvm_memory_slot *slot)
+{
+	struct kvm_sev_pinned_memory_slot *i;
+	struct list_head *head = &kvm->arch.sev_info.pinned_memory_slot;
+
+	list_for_each_entry(i, head, list) {
+		if (i->userspace_addr == slot->userspace_addr &&
+			i->id == slot->id)
+			return i;
+	}
+
+	return NULL;
+}
+
+static void amd_prepare_memory_region(struct kvm *kvm,
+				struct kvm_memory_slot *memslot,
+				const struct kvm_userspace_memory_region *mem,
+				enum kvm_mr_change change)
+{
+	struct kvm_sev_pinned_memory_slot *pinned_slot;
+	struct list_head *head = &kvm->arch.sev_info.pinned_memory_slot;
+
+	mutex_lock(&kvm->lock);
+
+	if (!sev_guest(kvm))
+		goto unlock;
+
+	if (change == KVM_MR_CREATE) {
+
+		if (!mem->memory_size)
+			goto unlock;
+
+		pinned_slot = kmalloc(sizeof(*pinned_slot), GFP_KERNEL);
+		if (pinned_slot == NULL)
+			goto unlock;
+
+		pinned_slot->pages = sev_pin_memory(mem->userspace_addr,
+				mem->memory_size, &pinned_slot->npages);
+		if (pinned_slot->pages == NULL) {
+			kfree(pinned_slot);
+			goto unlock;
+		}
+
+		sev_clflush_pages(pinned_slot->pages, pinned_slot->npages);
+
+		pinned_slot->id = memslot->id;
+		pinned_slot->userspace_addr = mem->userspace_addr;
+		list_add_tail(&pinned_slot->list, head);
+
+	} else if  (change == KVM_MR_DELETE) {
+
+		pinned_slot = sev_find_pinned_memory_slot(kvm, memslot);
+		if (!pinned_slot)
+			goto unlock;
+
+		sev_unpin_memory(pinned_slot->pages, pinned_slot->npages);
+		list_del(&pinned_slot->list);
+		kfree(pinned_slot);
+	}
+
+unlock:
+	mutex_unlock(&kvm->lock);
+}
+
 static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 {
 	int r = -ENOTTY;
@@ -6355,6 +6447,7 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.update_pi_irte = svm_update_pi_irte,
 
 	.memory_encryption_op = amd_memory_encryption_cmd,
+	.prepare_memory_region = amd_prepare_memory_region,
 };
 
 static int __init svm_init(void)
