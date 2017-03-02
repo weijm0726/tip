@@ -719,6 +719,12 @@ struct kvm_hv {
 	HV_REFERENCE_TSC_PAGE tsc_ref;
 };
 
+struct kvm_sev_info {
+	unsigned int handle;	/* firmware handle */
+	unsigned int asid;	/* asid for this guest */
+	int sev_fd;		/* SEV device fd */
+};
+
 struct kvm_arch {
 	unsigned int n_used_mmu_pages;
 	unsigned int n_requested_mmu_pages;
@@ -805,6 +811,8 @@ struct kvm_arch {
 
 	bool x2apic_format;
 	bool x2apic_broadcast_quirk_disabled;
+
+	struct kvm_sev_info sev_info;
 };
 
 struct kvm_vm_stat {

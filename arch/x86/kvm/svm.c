@@ -36,6 +36,7 @@
 #include <linux/slab.h>
 #include <linux/amd-iommu.h>
 #include <linux/hashtable.h>
+#include <linux/psp-sev.h>
 
 #include <asm/apic.h>
 #include <asm/perf_event.h>
@@ -211,6 +212,9 @@ struct vcpu_svm {
 	 */
 	struct list_head ir_list;
 	spinlock_t ir_list_lock;
+
+	/* which host cpu was used for running this vcpu */
+	bool last_cpuid;
 };
 
 /*
@@ -490,6 +494,64 @@ static inline bool gif_set(struct vcpu_svm *svm)
 	return !!(svm->vcpu.arch.hflags & HF_GIF_MASK);
 }
 
+/* Secure Encrypted Virtualization */
+static unsigned int max_sev_asid;
+static unsigned long *sev_asid_bitmap;
+
+static bool kvm_sev_enabled(void)
+{
+	return max_sev_asid ? 1 : 0;
+}
+
+static inline struct kvm_sev_info *sev_get_info(struct kvm *kvm)
+{
+	struct kvm_arch *vm_data = &kvm->arch;
+
+	return &vm_data->sev_info;
+}
+
+static unsigned int sev_get_handle(struct kvm *kvm)
+{
+	struct kvm_sev_info *sev_info = sev_get_info(kvm);
+
+	return sev_info->handle;
+}
+
+static inline int sev_guest(struct kvm *kvm)
+{
+	return sev_get_handle(kvm);
+}
+
+static inline int sev_get_asid(struct kvm *kvm)
+{
+	struct kvm_sev_info *sev_info = sev_get_info(kvm);
+
+	if (!sev_info)
+		return -EINVAL;
+
+	return sev_info->asid;
+}
+
+static inline int sev_get_fd(struct kvm *kvm)
+{
+	struct kvm_sev_info *sev_info = sev_get_info(kvm);
+
+	if (!sev_info)
+		return -EINVAL;
+
+	return sev_info->sev_fd;
+}
+
+static inline void sev_set_asid(struct kvm *kvm, int asid)
+{
+	struct kvm_sev_info *sev_info = sev_get_info(kvm);
+
+	if (!sev_info)
+		return;
+
+	sev_info->asid = asid;
+}
+
 static unsigned long iopm_base;
 
 struct kvm_ldttss_desc {
@@ -511,6 +573,8 @@ struct svm_cpu_data {
 	struct kvm_ldttss_desc *tss_desc;
 
 	struct page *save_area;
+
+	struct vmcb **sev_vmcbs;  /* index = sev_asid, value = vmcb pointer */
 };
 
 static DEFINE_PER_CPU(struct svm_cpu_data *, svm_data);
@@ -764,7 +828,7 @@ static int svm_hardware_enable(void)
 	sd->asid_generation = 1;
 	sd->max_asid = cpuid_ebx(SVM_CPUID_FUNC) - 1;
 	sd->next_asid = sd->max_asid + 1;
-	sd->min_asid = 1;
+	sd->min_asid = max_sev_asid + 1;
 
 	native_store_gdt(&gdt_descr);
 	gdt = (struct desc_struct *)gdt_descr.address;
@@ -825,6 +889,7 @@ static void svm_cpu_uninit(int cpu)
 
 	per_cpu(svm_data, raw_smp_processor_id()) = NULL;
 	__free_page(sd->save_area);
+	kfree(sd->sev_vmcbs);
 	kfree(sd);
 }
 
@@ -841,6 +906,14 @@ static int svm_cpu_init(int cpu)
 	r = -ENOMEM;
 	if (!sd->save_area)
 		goto err_1;
+
+	if (kvm_sev_enabled()) {
+		sd->sev_vmcbs = kmalloc((max_sev_asid + 1) * sizeof(void *),
+					GFP_KERNEL);
+		r = -ENOMEM;
+		if (!sd->sev_vmcbs)
+			goto err_1;
+	}
 
 	per_cpu(svm_data, cpu) = sd;
 
@@ -1017,6 +1090,61 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	return 0;
 }
 
+static __init void sev_hardware_setup(void)
+{
+	int ret, error, nguests;
+	struct sev_data_init *init;
+	struct sev_data_status *status;
+
+	/*
+	 * Get maximum number of encrypted guest supported: Fn8001_001F[ECX]
+	 * 	Bit 31:0: Number of supported guest
+	 */
+	nguests = cpuid_ecx(0x8000001F);
+	if (!nguests)
+		return;
+
+	init = kzalloc(sizeof(*init), GFP_KERNEL);
+	if (!init)
+		return;
+
+	status = kzalloc(sizeof(*status), GFP_KERNEL);
+	if (!status)
+		goto err_1;
+
+	/* Initialize SEV firmware */
+	ret = sev_platform_init(init, &error);
+	if (ret) {
+		pr_err("SEV: PLATFORM_INIT ret=%d (%#x)\n", ret, error);
+		goto err_2;
+	}
+
+	/* Initialize SEV ASID bitmap */
+	sev_asid_bitmap = kcalloc(BITS_TO_LONGS(nguests),
+				  sizeof(unsigned long), GFP_KERNEL);
+	if (IS_ERR(sev_asid_bitmap)) {
+		sev_platform_shutdown(&error);
+		goto err_2;
+	}
+
+	/* Query the platform status and print API version */
+	ret = sev_platform_status(status, &error);
+	if (ret) {
+		printk(KERN_ERR "SEV: PLATFORM_STATUS ret=%#x\n", error);
+		goto err_2;
+	}
+
+	max_sev_asid = nguests;
+
+	printk(KERN_INFO "kvm: SEV enabled\n");
+	printk(KERN_INFO "SEV API: %d.%d\n",
+			status->api_major, status->api_minor);
+err_2:
+	kfree(status);
+err_1:
+	kfree(init);
+}
+
 static __init int svm_hardware_setup(void)
 {
 	int cpu;
@@ -1051,6 +1179,9 @@ static __init int svm_hardware_setup(void)
 		printk(KERN_INFO "kvm: Nested Virtualization enabled\n");
 		kvm_enable_efer_bits(EFER_SVME | EFER_LMSLE);
 	}
+
+	if (boot_cpu_has(X86_FEATURE_SEV))
+		sev_hardware_setup();
 
 	for_each_possible_cpu(cpu) {
 		r = svm_cpu_init(cpu);
@@ -1094,9 +1225,24 @@ err:
 	return r;
 }
 
+static __exit void sev_hardware_unsetup(void)
+{
+	int ret, err;
+
+	ret = sev_platform_shutdown(&err);
+	if (ret)
+		printk(KERN_ERR "failed to shutdown PSP rc=%d (%#0x10x)\n",
+		ret, err);
+
+	kfree(sev_asid_bitmap);
+}
+
 static __exit void svm_hardware_unsetup(void)
 {
 	int cpu;
+
+	if (kvm_sev_enabled())
+		sev_hardware_unsetup();
 
 	for_each_possible_cpu(cpu)
 		svm_cpu_uninit(cpu);
@@ -1155,6 +1301,11 @@ static void avic_init_vmcb(struct vcpu_svm *svm)
 	vmcb->control.avic_physical_id |= AVIC_MAX_PHYSICAL_ID_COUNT;
 	vmcb->control.int_ctl |= AVIC_ENABLE_MASK;
 	svm->vcpu.arch.apicv_active = true;
+}
+
+static void sev_init_vmcb(struct vcpu_svm *svm)
+{
+	svm->vmcb->control.nested_ctl |= SVM_NESTED_CTL_SEV_ENABLE;
 }
 
 static void init_vmcb(struct vcpu_svm *svm)
@@ -1270,6 +1421,9 @@ static void init_vmcb(struct vcpu_svm *svm)
 
 	if (avic)
 		avic_init_vmcb(svm);
+
+	if (sev_guest(svm->vcpu.kvm))
+		sev_init_vmcb(svm);
 
 	mark_all_dirty(svm->vmcb);
 
@@ -2084,6 +2238,11 @@ static int pf_interception(struct vcpu_svm *svm)
 	default:
 		error_code = svm->vmcb->control.exit_info_1;
 
+		/* In SEV mode, the guest physical address will have C-bit
+		 * set. C-bit must be cleared before handling the fault.
+		 */
+		if (sev_guest(svm->vcpu.kvm))
+			fault_address &= ~sme_me_mask;
 		trace_kvm_page_fault(fault_address, error_code);
 		if (!npt_enabled && kvm_event_needs_reinjection(&svm->vcpu))
 			kvm_mmu_unprotect_page_virt(&svm->vcpu, fault_address);
@@ -4258,11 +4417,39 @@ static void reload_tss(struct kvm_vcpu *vcpu)
 	load_TR_desc();
 }
 
+static void pre_sev_run(struct vcpu_svm *svm)
+{
+	int asid = sev_get_asid(svm->vcpu.kvm);
+	int cpu = raw_smp_processor_id();
+	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
+
+	/* Assign the asid allocated for this SEV guest */
+	svm->vmcb->control.asid = asid;
+
+	/* Flush guest TLB:
+	 * - when different VMCB for the same ASID is to be run on the
+	 *   same host CPU
+	 *   or
+	 * - this VMCB was executed on different host cpu in previous VMRUNs.
+	 */
+	if (sd->sev_vmcbs[asid] != (void *)svm->vmcb ||
+		svm->last_cpuid != cpu)
+		svm->vmcb->control.tlb_ctl = TLB_CONTROL_FLUSH_ALL_ASID;
+
+	svm->last_cpuid = cpu;
+	sd->sev_vmcbs[asid] = (void *)svm->vmcb;
+
+	mark_dirty(svm->vmcb, VMCB_ASID);
+}
+
 static void pre_svm_run(struct vcpu_svm *svm)
 {
 	int cpu = raw_smp_processor_id();
 
 	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
+
+	if (sev_guest(svm->vcpu.kvm))
+		return pre_sev_run(svm);
 
 	/* FIXME: handle wraparound of asid_generation */
 	if (svm->asid_generation != sd->asid_generation)
