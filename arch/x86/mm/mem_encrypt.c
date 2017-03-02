@@ -16,8 +16,12 @@
 
 #include <asm/tlbflush.h>
 #include <asm/fixmap.h>
+#include <asm/setup.h>
+#include <asm/bootparam.h>
 
 extern pmdval_t early_pmd_flags;
+int __init __early_make_pgtable(unsigned long, pmdval_t);
+void __init __early_pgtable_flush(void);
 
 /*
  * Since SME related variables are set early in the boot process they must
@@ -101,6 +105,76 @@ void __init sme_early_encrypt(resource_size_t paddr, unsigned long size)
 void __init sme_early_decrypt(resource_size_t paddr, unsigned long size)
 {
 	__sme_early_enc_dec(paddr, size, false);
+}
+
+static void __init __sme_early_map_unmap_mem(void *vaddr, unsigned long size,
+					     bool map)
+{
+	unsigned long paddr = (unsigned long)vaddr - __PAGE_OFFSET;
+	pmdval_t pmd_flags, pmd;
+
+	/* Use early_pmd_flags but remove the encryption mask */
+	pmd_flags = early_pmd_flags & ~sme_me_mask;
+
+	do {
+		pmd = map ? (paddr & PMD_MASK) + pmd_flags : 0;
+		__early_make_pgtable((unsigned long)vaddr, pmd);
+
+		vaddr += PMD_SIZE;
+		paddr += PMD_SIZE;
+		size = (size <= PMD_SIZE) ? 0 : size - PMD_SIZE;
+	} while (size);
+}
+
+static void __init __sme_map_unmap_bootdata(char *real_mode_data, bool map)
+{
+	struct boot_params *boot_data;
+	unsigned long cmdline_paddr;
+
+	__sme_early_map_unmap_mem(real_mode_data, sizeof(boot_params), map);
+	boot_data = (struct boot_params *)real_mode_data;
+
+	/*
+	 * Determine the command line address only after having established
+	 * the decrypted mapping.
+	 */
+	cmdline_paddr = boot_data->hdr.cmd_line_ptr |
+			((u64)boot_data->ext_cmd_line_ptr << 32);
+
+	if (cmdline_paddr)
+		__sme_early_map_unmap_mem(__va(cmdline_paddr),
+					  COMMAND_LINE_SIZE, map);
+}
+
+void __init sme_unmap_bootdata(char *real_mode_data)
+{
+	/* If SME is not active, the bootdata is in the correct state */
+	if (!sme_active())
+		return;
+
+	/*
+	 * The bootdata and command line aren't needed anymore so clear
+	 * any mapping of them.
+	 */
+	__sme_map_unmap_bootdata(real_mode_data, false);
+
+	__early_pgtable_flush();
+}
+
+void __init sme_map_bootdata(char *real_mode_data)
+{
+	/* If SME is not active, the bootdata is in the correct state */
+	if (!sme_active())
+		return;
+
+	/*
+	 * The bootdata and command line will not be encrypted, so they
+	 * need to be mapped as decrypted memory so they can be copied
+	 * properly.
+	 */
+	__sme_map_unmap_bootdata(real_mode_data, true);
+
+	__early_pgtable_flush();
 }
 
 void __init sme_early_init(void)
