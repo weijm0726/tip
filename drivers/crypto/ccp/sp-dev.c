@@ -212,6 +212,8 @@ int sp_init(struct sp_device *sp)
 	if (sp->dev_data->ccp_vdata)
 		ccp_dev_init(sp);
 
+	if (sp->dev_data->psp_vdata)
+		psp_dev_init(sp);
 	return 0;
 }
 
@@ -219,6 +221,9 @@ void sp_destroy(struct sp_device *sp)
 {
 	if (sp->dev_data->ccp_vdata)
 		ccp_dev_destroy(sp);
+
+	if (sp->dev_data->psp_vdata)
+		psp_dev_destroy(sp);
 
 	sp_del_device(sp);
 }
@@ -229,6 +234,12 @@ int sp_suspend(struct sp_device *sp, pm_message_t state)
 
 	if (sp->dev_data->ccp_vdata) {
 		ret = ccp_dev_suspend(sp, state);
+		if (ret)
+			return ret;
+	}
+
+	if (sp->dev_data->psp_vdata) {
+		ret = psp_dev_suspend(sp, state);
 		if (ret)
 			return ret;
 	}
@@ -246,6 +257,11 @@ int sp_resume(struct sp_device *sp)
 			return ret;
 	}
 
+	if (sp->dev_data->psp_vdata) {
+		ret = psp_dev_resume(sp);
+		if (ret)
+			return ret;
+	}
 	return 0;
 }
 

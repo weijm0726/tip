@@ -271,6 +271,7 @@ static int sp_pci_resume(struct pci_dev *pdev)
 extern struct ccp_vdata ccpv3_pci;
 extern struct ccp_vdata ccpv5a;
 extern struct ccp_vdata ccpv5b;
+extern struct psp_vdata psp_entry;
 
 static const struct sp_dev_data dev_data[] = {
 	{
@@ -283,6 +284,9 @@ static const struct sp_dev_data dev_data[] = {
 		.bar = 2,
 #ifdef CONFIG_CRYPTO_DEV_CCP
 		.ccp_vdata = &ccpv5a,
+#endif
+#ifdef CONFIG_CRYPTO_DEV_PSP
+		.psp_vdata = &psp_entry
 #endif
 	},
 	{

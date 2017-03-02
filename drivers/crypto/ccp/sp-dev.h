@@ -40,12 +40,18 @@ struct ccp_vdata {
 	const unsigned int offset;
 };
 
+struct psp_vdata {
+	const unsigned int version;
+	const struct psp_actions *perform;
+	const unsigned int offset;
+};
+
 /* Structure to hold SP device data */
 struct sp_dev_data {
 	const unsigned int bar;
 
 	const struct ccp_vdata *ccp_vdata;
-	const void *psp_vdata;
+	const struct psp_vdata *psp_vdata;
 };
 
 struct sp_device {
@@ -136,5 +142,31 @@ static inline int ccp_dev_resume(struct sp_device *sp)
 }
 
 #endif	/* CONFIG_CRYPTO_DEV_CCP */
+
+#ifdef CONFIG_CRYPTO_DEV_PSP
+
+int psp_dev_init(struct sp_device *sp);
+void psp_dev_destroy(struct sp_device *sp);
+
+int psp_dev_suspend(struct sp_device *sp, pm_message_t state);
+int psp_dev_resume(struct sp_device *sp);
+#else /* !CONFIG_CRYPTO_DEV_CCP */
+
+static inline int psp_dev_init(struct sp_device *sp)
+{
+	return 0;
+}
+static inline void psp_dev_destroy(struct sp_device *sp) { }
+
+static inline int psp_dev_suspend(struct sp_device *sp, pm_message_t state)
+{
+	return 0;
+}
+static inline int psp_dev_resume(struct sp_device *sp)
+{
+	return 0;
+}
+
+#endif /* CONFIG_CRYPTO_DEV_CCP */
 
 #endif

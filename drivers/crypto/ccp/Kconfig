@@ -34,4 +34,11 @@ config CRYPTO_DEV_CCP
 	  Provides the interface to use the AMD Cryptographic Coprocessor
 	  which can be used to offload encryption operations such as SHA,
 	  AES and more.
+
+config CRYPTO_DEV_PSP
+	bool "Platform Security Processor interface"
+	default y
+	help
+	 Provide the interface for AMD Platform Security Processor (PSP) device.
+
 endif
