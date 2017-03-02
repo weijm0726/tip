@@ -151,7 +151,15 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 		pcm = new_pcm;
 	}
 
+	/*
+	 * If the page being mapped is in memory and SEV is active then
+	 * make sure the memory encryption attribute is enabled in the
+	 * resulting mapping.
+	 */
 	prot = PAGE_KERNEL_IO;
+	if (sev_active() && page_is_mem(pfn))
+		prot = __pgprot(pgprot_val(prot) | _PAGE_ENC);
+
 	switch (pcm) {
 	case _PAGE_CACHE_MODE_UC:
 	default:

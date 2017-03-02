@@ -445,6 +445,7 @@ static inline int get_page_unless_zero(struct page *page)
 }
 
 extern int page_is_ram(unsigned long pfn);
+extern int page_is_mem(unsigned long pfn);
 
 enum {
 	REGION_INTERSECTS,

@@ -518,6 +518,46 @@ int __weak page_is_ram(unsigned long pfn)
 }
 EXPORT_SYMBOL_GPL(page_is_ram);
 
+/*
+ * This function returns true if the target memory is marked as
+ * IORESOURCE_MEM and IORESOUCE_BUSY and described as other than
+ * IORES_DESC_NONE (e.g. IORES_DESC_ACPI_TABLES).
+ */
+static int walk_mem_range(unsigned long start_pfn, unsigned long nr_pages)
+{
+	struct resource res;
+	unsigned long pfn, end_pfn;
+	u64 orig_end;
+	int ret = -1;
+
+	res.start = (u64) start_pfn << PAGE_SHIFT;
+	res.end = ((u64)(start_pfn + nr_pages) << PAGE_SHIFT) - 1;
+	res.flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+	orig_end = res.end;
+	while ((res.start < res.end) &&
+		(find_next_iomem_res(&res, IORES_DESC_NONE, true) >= 0)) {
+		pfn = (res.start + PAGE_SIZE - 1) >> PAGE_SHIFT;
+		end_pfn = (res.end + 1) >> PAGE_SHIFT;
+		if (end_pfn > pfn)
+			ret = (res.desc != IORES_DESC_NONE) ? 1 : 0;
+		if (ret)
+			break;
+		res.start = res.end + 1;
+		res.end = orig_end;
+	}
+	return ret;
+}
+
+/*
+ * This generic page_is_mem() returns true if specified address is
+ * registered as memory in iomem_resource list.
+ */
+int __weak page_is_mem(unsigned long pfn)
+{
+	return walk_mem_range(pfn, 1) == 1;
+}
+EXPORT_SYMBOL_GPL(page_is_mem);
+
 /**
  * region_intersects() - determine intersection of region with known resources
  * @start: region start address
