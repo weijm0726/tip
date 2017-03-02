@@ -41,4 +41,11 @@ config CRYPTO_DEV_PSP
 	help
 	 Provide the interface for AMD Platform Security Processor (PSP) device.
 
+config CRYPTO_DEV_SEV
+	bool "Secure Encrypted Virtualization (SEV) interface"
+	default y
+	help
+	 Provide the kernel and userspace (/dev/sev) interface to issue the
+	 Secure Encrypted Virtualization (SEV) commands.
+
 endif

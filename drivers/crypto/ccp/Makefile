@@ -7,6 +7,7 @@ ccp-$(CONFIG_CRYPTO_DEV_CCP) += ccp-dev.o \
 	    ccp-dev-v5.o \
 	    ccp-dmaengine.o
 ccp-$(CONFIG_CRYPTO_DEV_PSP) += psp-dev.o
+ccp-$(CONFIG_CRYPTO_DEV_SEV) += sev-dev.o sev-ops.o
 
 obj-$(CONFIG_CRYPTO_DEV_CCP_CRYPTO) += ccp-crypto.o
 ccp-crypto-objs := ccp-crypto-main.o \
