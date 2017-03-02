@@ -187,6 +187,7 @@
  * Reuse free bits when adding new feature flags!
  */
 
+#define X86_FEATURE_SME		( 7*32+ 0) /* AMD Secure Memory Encryption */
 #define X86_FEATURE_CPB		( 7*32+ 2) /* AMD Core Performance Boost */
 #define X86_FEATURE_EPB		( 7*32+ 3) /* IA32_ENERGY_PERF_BIAS support */
 #define X86_FEATURE_CAT_L3	( 7*32+ 4) /* Cache Allocation Technology L3 */
