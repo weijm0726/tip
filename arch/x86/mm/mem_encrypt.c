@@ -15,6 +15,7 @@
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
 #include <linux/swiotlb.h>
+#include <linux/mem_encrypt.h>
 
 #include <asm/tlbflush.h>
 #include <asm/fixmap.h>
@@ -256,6 +257,68 @@ static void sme_free(struct device *dev, size_t size, void *vaddr,
 				     1 << get_order(size));
 
 	swiotlb_free_coherent(dev, size, vaddr, dma_handle);
+}
+
+static unsigned long __init get_pte_flags(unsigned long address)
+{
+	int level;
+	pte_t *pte;
+	unsigned long flags = _KERNPG_TABLE_NOENC | _PAGE_ENC;
+
+	pte = lookup_address(address, &level);
+	if (!pte)
+		return flags;
+
+	switch (level) {
+	case PG_LEVEL_4K:
+		flags = pte_flags(*pte);
+		break;
+	case PG_LEVEL_2M:
+		flags = pmd_flags(*(pmd_t *)pte);
+		break;
+	case PG_LEVEL_1G:
+		flags = pud_flags(*(pud_t *)pte);
+		break;
+	default:
+		break;
+	}
+
+	return flags;
+}
+
+int __init early_set_memory_enc_dec(void *vaddr, unsigned long size,
+				    unsigned long flags)
+{
+	unsigned long pfn, npages;
+	unsigned long addr = (unsigned long)vaddr & PAGE_MASK;
+
+	/* We are going to change the physical page attribute from C=1 to C=0.
+	 * Flush the caches to ensure that all the data with C=1 is flushed to
+	 * memory. Any caching of the vaddr after function returns will
+	 * use C=0.
+	 */
+	clflush_cache_range(vaddr, size);
+
+	npages = PAGE_ALIGN(size) >> PAGE_SHIFT;
+	pfn = slow_virt_to_phys((void *)addr) >> PAGE_SHIFT;
+
+	return kernel_map_pages_in_pgd(init_mm.pgd, pfn, addr, npages,
+					flags & ~sme_me_mask);
+
+}
+
+int __init early_set_memory_decrypted(void *vaddr, unsigned long size)
+{
+	unsigned long flags = get_pte_flags((unsigned long)vaddr);
+
+	return early_set_memory_enc_dec(vaddr, size, flags & ~sme_me_mask);
+}
+
+int __init early_set_memory_encrypted(void *vaddr, unsigned long size)
+{
+	unsigned long flags = get_pte_flags((unsigned long)vaddr);
+
+	return early_set_memory_enc_dec(vaddr, size, flags | _PAGE_ENC);
 }
 
 static struct dma_map_ops sme_dma_ops = {

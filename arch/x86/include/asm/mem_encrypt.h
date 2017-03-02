@@ -47,6 +47,9 @@ void __init sme_unmap_bootdata(char *real_mode_data);
 
 void __init sme_early_init(void);
 
+int __init early_set_memory_decrypted(void *addr, unsigned long size);
+int __init early_set_memory_encrypted(void *addr, unsigned long size);
+
 /* Architecture __weak replacement functions */
 void __init mem_encrypt_init(void);
 
@@ -108,6 +111,18 @@ static inline void __init sme_unmap_bootdata(char *real_mode_data)
 
 static inline void __init sme_early_init(void)
 {
+}
+
+static inline int __init early_set_memory_decrypted(void *addr,
+						    unsigned long size)
+{
+	return 1;
+}
+
+static inline int __init early_set_memory_encrypted(void *addr,
+						    unsigned long size)
+{
+	return 1;
 }
 
 #define __sme_pa		__pa
