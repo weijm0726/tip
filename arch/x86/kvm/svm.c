@@ -5921,6 +5921,38 @@ err_1:
 	return ret;
 }
 
+static int sev_launch_finish(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	int i, ret;
+	struct sev_data_launch_finish *data;
+	struct kvm_vcpu *vcpu;
+
+	if (!sev_guest(kvm))
+		return -EINVAL;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	/* launch finish */
+	data->handle = sev_get_handle(kvm);
+	ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_FINISH, data, &argp->error);
+	if (ret)
+		goto err_1;
+
+	/* Iterate through each vcpus and set SEV KVM_SEV_FEATURE bit in
+	 * KVM_CPUID_FEATURE to indicate that SEV is enabled on this vcpu
+	 */
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		sev_init_vmcb(to_svm(vcpu));
+		svm_cpuid_update(vcpu);
+	}
+
+err_1:
+	kfree(data);
+	return ret;
+}
+
 static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 {
 	int r = -ENOTTY;
@@ -5938,6 +5970,10 @@ static int amd_memory_encryption_cmd(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_LAUNCH_UPDATE_DATA: {
 		r = sev_launch_update_data(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_LAUNCH_FINISH: {
+		r = sev_launch_finish(kvm, &sev_cmd);
 		break;
 	}
 	default:
