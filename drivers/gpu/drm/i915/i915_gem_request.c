@@ -926,7 +926,7 @@ static void reset_wait_queue(wait_queue_head_t *q, wait_queue_entry_t *wait)
 	unsigned long flags;
 
 	spin_lock_irqsave(&q->lock, flags);
-	if (list_empty(&wait->task_list))
+	if (list_empty(&wait->entry))
 		__add_wait_queue(q, wait);
 	spin_unlock_irqrestore(&q->lock, flags);
 }
