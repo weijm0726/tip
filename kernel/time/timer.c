@@ -1358,8 +1358,11 @@ static int next_pending_bucket(struct timer_base *base, unsigned offset,
 /*
  * Search the first expiring timer in the various clock levels. Caller must
  * hold base->lock.
+ *
+ * Stores the next expiry time in base. The return value indicates whether
+ * the base is empty or not.
  */
-static unsigned long __next_timer_interrupt(struct timer_base *base)
+static bool __next_timer_interrupt(struct timer_base *base)
 {
 	unsigned long clk, next, adj;
 	unsigned lvl, offset = 0;
@@ -1416,7 +1419,10 @@ static unsigned long __next_timer_interrupt(struct timer_base *base)
 		clk >>= LVL_CLK_SHIFT;
 		clk += adj;
 	}
-	return next;
+	/* Store the next event in the base */
+	base->next_expiry = next;
+	/* Return whether the base is empty or not */
+	return next == base->clk + NEXT_TIMER_MAX_DELTA;
 }
 
 /*
@@ -1465,7 +1471,7 @@ u64 get_next_timer_interrupt(unsigned long basej, u64 basem)
 	struct timer_base *base = this_cpu_ptr(&timer_bases[BASE_STD]);
 	u64 expires = KTIME_MAX;
 	unsigned long nextevt;
-	bool is_max_delta;
+	bool is_empty;
 
 	/*
 	 * Pretend that there is no timer pending if the cpu is offline.
@@ -1475,9 +1481,8 @@ u64 get_next_timer_interrupt(unsigned long basej, u64 basem)
 		return expires;
 
 	spin_lock(&base->lock);
-	nextevt = __next_timer_interrupt(base);
-	is_max_delta = (nextevt == base->clk + NEXT_TIMER_MAX_DELTA);
-	base->next_expiry = nextevt;
+	is_empty = __next_timer_interrupt(base);
+	nextevt = base->next_expiry;
 	/*
 	 * We have a fresh next event. Check whether we can forward the
 	 * base. We can only do that when @basej is past base->clk
@@ -1490,19 +1495,16 @@ u64 get_next_timer_interrupt(unsigned long basej, u64 basem)
 			base->clk = nextevt;
 	}
 
-	if (time_before_eq(nextevt, basej)) {
-		expires = basem;
-		base->is_idle = false;
-	} else {
-		if (!is_max_delta)
-			expires = basem + (nextevt - basej) * TICK_NSEC;
-		/*
-		 * If we expect to sleep more than a tick, mark the base idle:
-		 */
-		if ((expires - basem) > TICK_NSEC)
-			base->is_idle = true;
-	}
+	/* Base is idle if the next event is more than a tick away. */
+	base->is_idle = time_after(nextevt, basej + 1);
 	spin_unlock(&base->lock);
+
+	if (!is_empty) {
+		/* If we missed a tick already, force 0 delta */
+		if (time_before_eq(nextevt, basej))
+			nextevt = basej;
+		expires = basem + (nextevt - basej) * TICK_NSEC;
+	}
 
 	return cmp_next_hrtimer_event(basem, expires);
 }
@@ -1534,7 +1536,10 @@ static int collect_expired_timers(struct timer_base *base,
 	 * the next expiring timer.
 	 */
 	if ((long)(jiffies - base->clk) > 2) {
-		unsigned long next = __next_timer_interrupt(base);
+		unsigned long next;
+
+		__next_timer_interrupt(base);
+		next = base->next_expiry;
 
 		/*
 		 * If the next timer is ahead of time forward to current
