@@ -30,6 +30,7 @@
 
 #include <asm/irq_regs.h>
 
+#include "timer_migration.h"
 #include "tick-internal.h"
 
 #include <trace/events/timer.h>
@@ -680,11 +681,46 @@ static void tick_nohz_restart(struct tick_sched *ts, ktime_t now)
 		tick_program_event(hrtimer_get_expires(&ts->sched_timer), 1);
 }
 
+#ifdef CONFIG_SMP
+static u64
+tick_tmigr_idle(struct tick_sched *ts, u64 next_global, u64 next_local)
+{
+	ts->tmigr_idle = 1;
+
+	/*
+	 * If next_global is after next_local, event does not have to
+	 * be queued in the timer migration hierarchy, but cpu needs
+	 * to be marked as idle.
+	 */
+	if (next_global >= next_local)
+		next_global = KTIME_MAX;
+
+	next_global = tmigr_cpu_idle(next_global);
+
+	return min_t(u64, next_local, next_global);
+}
+
+static void tick_tmigr_stop_idle(struct tick_sched *ts)
+{
+	if (ts->tmigr_idle) {
+		ts->tmigr_idle = 0;
+		tmigr_cpu_activate();
+	}
+}
+#else
+static u64
+tick_tmigr_idle(struct tick_sched *ts, u64 next_global, u64 next_local)
+{
+	return min_t(u64, next_global, next_local);
+}
+static inline void tick_tmigr_stop_idle(struct tick_sched *ts) { }
+#endif /*CONFIG_SMP*/
+
 static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 					 ktime_t now, int cpu)
 {
 	struct clock_event_device *dev = __this_cpu_read(tick_cpu_device.evtdev);
-	u64 basemono, next_tick, next_local, next_global, next_rcu, delta, expires;
+	u64 basemono, next_local, next_global, next_rcu, delta, expires;
 	unsigned long basejiff;
 	ktime_t	tick;
 
@@ -693,7 +729,12 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 
 	if (rcu_needs_cpu(basemono, &next_rcu) ||
 	    arch_needs_cpu() || irq_work_needs_cpu()) {
-		next_tick = basemono + TICK_NSEC;
+		/*
+		 * If anyone needs the CPU, treat this as a local
+		 * timer expiring in a jiffy.
+		 */
+		next_global = KTIME_MAX;
+		next_local = basemono + TICK_NSEC;
 	} else {
 		/*
 		 * Get the next pending timer. If high resolution
@@ -704,19 +745,46 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 		 */
 		next_local = get_next_timer_interrupt(basejiff, basemono,
 						      &next_global);
-		next_local = min(next_local, next_global);
-		ts->next_timer = next_local;
-		/* Take the next rcu event into account */
-		next_tick = next_rcu < next_local ? next_rcu : next_local;
+		/*
+		 * Take RCU into account.  Even though rcu_needs_cpu()
+		 * returned false, RCU might need a wake up event
+		 * after all, as reflected in the value of next_rcu.
+		 */
+		next_local = min_t(u64, next_rcu, next_local);
 	}
+
+	/*
+	 * The CPU might be the last one going inactive in the timer
+	 * migration hierarchy. Mark the CPU inactive and get the next
+	 * timer event returned, if the next local event is more than a
+	 * tick away.
+	 *
+	 * If the CPU is the last one to go inactive, then the earliest
+	 * event (next local or next global event in the hierarchy) is
+	 * returned.
+	 *
+	 * Otherwise the next local event is returned and the next global
+	 * event of this CPU is queued in the hierarchy.
+	 */
+	delta = next_local - basemono;
+	if (delta > (u64)TICK_NSEC)
+		next_local = tick_tmigr_idle(ts, next_local, next_global);
+
+	ts->next_timer = next_local;
 
 	/*
 	 * If the tick is due in the next period, keep it ticking or
 	 * force prod the timer.
 	 */
-	delta = next_tick - basemono;
+	delta = next_local - basemono;
 	if (delta <= (u64)TICK_NSEC) {
 		tick = 0;
+
+		/*
+		 * If the CPU deactivated itself in the timer migration
+		 * hierarchy, activate it again.
+		 */
+		tick_tmigr_stop_idle(ts);
 
 		/*
 		 * Tell the timer code that the base is not idle, i.e. undo
@@ -782,7 +850,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	else
 		expires = KTIME_MAX;
 
-	expires = min_t(u64, expires, next_tick);
+	expires = min_t(u64, expires, next_local);
 	tick = expires;
 
 	/* Skip reprogram of event if its not changed */
@@ -1047,6 +1115,8 @@ void tick_nohz_idle_exit(void)
 
 	ts->inidle = 0;
 
+	tick_tmigr_stop_idle(ts);
+
 	if (ts->idle_active || ts->tick_stopped)
 		now = ktime_get();
 
@@ -1126,8 +1196,12 @@ static inline void tick_nohz_irq_enter(void)
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 	ktime_t now;
 
-	if (!ts->idle_active && !ts->tick_stopped)
+	if (!ts->idle_active && !ts->tick_stopped && !ts->tmigr_idle)
 		return;
+
+	/* FIMXE: Is this really needed ???? */
+	tick_tmigr_stop_idle(ts);
+
 	now = ktime_get();
 	if (ts->idle_active)
 		tick_nohz_stop_idle(ts, now);

@@ -51,6 +51,7 @@
 #include <asm/timex.h>
 #include <asm/io.h>
 
+#include "timer_migration.h"
 #include "tick-internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -185,6 +186,10 @@ EXPORT_SYMBOL(jiffies_64);
 #define WHEEL_SIZE	(LVL_SIZE * LVL_DEPTH)
 
 #ifdef CONFIG_NO_HZ_COMMON
+/*
+ * If multiple bases need to be locked, use the base ordering for lock
+ * nesting, i.e. lowest number first.
+ */
 # define NR_BASES	3
 # define BASE_LOCAL	0
 # define BASE_GLOBAL	1
@@ -216,7 +221,7 @@ unsigned int sysctl_timer_migration = 1;
 
 void timers_update_migration(bool update_nohz)
 {
-	bool on = sysctl_timer_migration && tick_nohz_active;
+	bool on = sysctl_timer_migration && tick_nohz_active && tmigr_enabled;
 	unsigned int cpu;
 
 	/* Avoid the loop, if nothing to update */
@@ -1619,13 +1624,27 @@ static int collect_expired_timers(struct timer_base *base,
 	}
 	return __collect_expired_timers(base, heads);
 }
-#else
+
+static inline void __run_timers(struct timer_base *base);
+
+#ifdef CONFIG_SMP
+void timer_expire_remote(unsigned int cpu)
+{
+	struct timer_base *base = per_cpu_ptr(&timer_bases[BASE_GLOBAL], cpu);
+
+	spin_lock_irq(&base->lock);
+	__run_timers(base);
+	spin_unlock_irq(&base->lock);
+}
+#endif
+
+#else /* CONFIG_NO_HZ_COMMON */
 static inline int collect_expired_timers(struct timer_base *base,
 					 struct hlist_head *heads)
 {
 	return __collect_expired_timers(base, heads);
 }
-#endif
+#endif /* !CONFIG_NO_HZ_COMMON */
 
 /*
  * Called from the timer interrupt handler to charge one tick to the current
@@ -1689,11 +1708,16 @@ static void run_timer_base(int index, bool check_nohz)
  */
 static __latent_entropy void run_timer_softirq(struct softirq_action *h)
 {
+	struct timer_base *base = this_cpu_ptr(&timer_bases[BASE_LOCAL]);
+
 	run_timer_base(BASE_LOCAL, false);
 
 	if (IS_ENABLED(CONFIG_NO_HZ_COMMON)) {
 		run_timer_base(BASE_GLOBAL, false);
 		run_timer_base(BASE_DEF, true);
+
+		if (base->nohz_active)
+			tmigr_handle_remote();
 	}
 }
 
