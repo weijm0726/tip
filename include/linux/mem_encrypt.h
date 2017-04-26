@@ -28,6 +28,12 @@ static inline bool sme_active(void)
 {
 	return false;
 }
+
+static inline u64 sme_dma_mask(void)
+{
+	return 0ULL;
+}
+
 #endif
 
 #endif	/* CONFIG_AMD_MEM_ENCRYPT */
