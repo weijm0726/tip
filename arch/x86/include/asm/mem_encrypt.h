@@ -31,6 +31,9 @@ void __init sme_early_encrypt(resource_size_t paddr,
 void __init sme_early_decrypt(resource_size_t paddr,
 			      unsigned long size);
 
+void __init sme_map_bootdata(char *real_mode_data);
+void __init sme_unmap_bootdata(char *real_mode_data);
+
 void __init sme_early_init(void);
 
 #else	/* !CONFIG_AMD_MEM_ENCRYPT */
@@ -51,6 +54,14 @@ static inline void __init sme_early_encrypt(resource_size_t paddr,
 
 static inline void __init sme_early_decrypt(resource_size_t paddr,
 					    unsigned long size)
+{
+}
+
+static inline void __init sme_map_bootdata(char *real_mode_data)
+{
+}
+
+static inline void __init sme_unmap_bootdata(char *real_mode_data)
 {
 }
 
