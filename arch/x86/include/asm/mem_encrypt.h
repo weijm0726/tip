@@ -26,6 +26,11 @@ static inline bool sme_active(void)
 	return !!sme_me_mask;
 }
 
+void __init sme_early_encrypt(resource_size_t paddr,
+			      unsigned long size);
+void __init sme_early_decrypt(resource_size_t paddr,
+			      unsigned long size);
+
 void __init sme_early_init(void);
 
 #else	/* !CONFIG_AMD_MEM_ENCRYPT */
@@ -38,6 +43,16 @@ static inline bool sme_active(void)
 	return false;
 }
 #endif
+
+static inline void __init sme_early_encrypt(resource_size_t paddr,
+					    unsigned long size)
+{
+}
+
+static inline void __init sme_early_decrypt(resource_size_t paddr,
+					    unsigned long size)
+{
+}
 
 static inline void __init sme_early_init(void)
 {
