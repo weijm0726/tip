@@ -31,6 +31,12 @@ static inline u64 sme_dma_mask(void)
 	return ((u64)sme_me_mask << 1) - 1;
 }
 
+void sme_encrypt_execute(unsigned long encrypted_kernel_vaddr,
+			 unsigned long decrypted_kernel_vaddr,
+			 unsigned long kernel_len,
+			 unsigned long encryption_wa,
+			 unsigned long encryption_pgd);
+
 void __init sme_early_encrypt(resource_size_t paddr,
 			      unsigned long size);
 void __init sme_early_decrypt(resource_size_t paddr,
