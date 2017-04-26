@@ -18,6 +18,8 @@
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
 #include <linux/swiotlb.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 
 #include <asm/tlbflush.h>
 #include <asm/fixmap.h>
@@ -25,6 +27,7 @@
 #include <asm/bootparam.h>
 #include <asm/cacheflush.h>
 #include <asm/sections.h>
+#include <asm/mem_encrypt.h>
 
 /*
  * Since SME related variables are set early in the boot process they must
@@ -36,6 +39,52 @@ EXPORT_SYMBOL_GPL(sme_me_mask);
 
 /* Buffer used for early in-place encryption by BSP, no locking needed */
 static char sme_early_buffer[PAGE_SIZE] __aligned(PAGE_SIZE);
+
+/*
+ * Sysfs support for SME.
+ *   Create an sme directory under /sys/kernel/mm
+ *   Create two sme entries under /sys/kernel/mm/sme:
+ *     active - returns 0 if not active, 1 if active
+ *     encryption_mask - returns the encryption mask in use
+ */
+static ssize_t active_show(struct kobject *kobj, struct kobj_attribute *attr,
+			   char *buf)
+{
+	return sprintf(buf, "%u\n", sme_active());
+}
+static struct kobj_attribute active_attr = __ATTR_RO(active);
+
+static ssize_t encryption_mask_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "0x%016lx\n", sme_me_mask);
+}
+static struct kobj_attribute encryption_mask_attr = __ATTR_RO(encryption_mask);
+
+static struct attribute *sme_attrs[] = {
+	&active_attr.attr,
+	&encryption_mask_attr.attr,
+	NULL
+};
+
+static struct attribute_group sme_attr_group = {
+	.attrs = sme_attrs,
+	.name = "sme",
+};
+
+static int __init sme_sysfs_init(void)
+{
+	int ret;
+
+	ret = sysfs_create_group(mm_kobj, &sme_attr_group);
+	if (ret) {
+		pr_err("SME sysfs initialization failed\n");
+		return ret;
+	}
+
+	return 0;
+}
+subsys_initcall(sme_sysfs_init);
 
 /*
  * This routine does not change the underlying encryption setting of the
