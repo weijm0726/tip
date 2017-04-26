@@ -12,6 +12,8 @@
 #include <asm/dma.h>
 #include <asm/xen/swiotlb-xen.h>
 #include <asm/iommu_table.h>
+#include <asm/mem_encrypt.h>
+
 int swiotlb __read_mostly;
 
 void *x86_swiotlb_alloc_coherent(struct device *hwdev, size_t size,
@@ -64,11 +66,13 @@ static const struct dma_map_ops swiotlb_dma_ops = {
  * pci_swiotlb_detect_override - set swiotlb to 1 if necessary
  *
  * This returns non-zero if we are forced to use swiotlb (by the boot
- * option).
+ * option). If memory encryption is enabled then swiotlb will be set
+ * to 1 so that bounce buffers are allocated and used for devices that
+ * do not support the addressing range required for the encryption mask.
  */
 int __init pci_swiotlb_detect_override(void)
 {
-	if (swiotlb_force == SWIOTLB_FORCE)
+	if ((swiotlb_force == SWIOTLB_FORCE) || sme_active())
 		swiotlb = 1;
 
 	return swiotlb;

@@ -36,6 +36,11 @@ void __init sme_unmap_bootdata(char *real_mode_data);
 
 void __init sme_early_init(void);
 
+/* Architecture __weak replacement functions */
+void __init mem_encrypt_init(void);
+
+void swiotlb_set_mem_attributes(void *vaddr, unsigned long size);
+
 #else	/* !CONFIG_AMD_MEM_ENCRYPT */
 
 #ifndef sme_me_mask
