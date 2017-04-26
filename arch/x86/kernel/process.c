@@ -24,6 +24,7 @@
 #include <linux/cpuidle.h>
 #include <trace/events/power.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/kexec.h>
 #include <asm/cpu.h>
 #include <asm/apic.h>
 #include <asm/syscalls.h>
@@ -355,8 +356,25 @@ bool xen_set_default_idle(void)
 	return ret;
 }
 #endif
+
 void stop_this_cpu(void *dummy)
 {
+	bool do_wbinvd_halt = false;
+
+	if (kexec_in_progress && boot_cpu_has(X86_FEATURE_SME)) {
+		/*
+		 * If we are performing a kexec and the processor supports
+		 * SME then we need to clear out cache information before
+		 * halting. With kexec, going from SME inactive to SME active
+		 * requires clearing cache entries so that addresses without
+		 * the encryption bit set don't corrupt the same physical
+		 * address that has the encryption bit set when caches are
+		 * flushed. Perform a wbinvd followed by a halt to achieve
+		 * this.
+		 */
+		do_wbinvd_halt = true;
+	}
+
 	local_irq_disable();
 	/*
 	 * Remove this CPU:
@@ -365,8 +383,12 @@ void stop_this_cpu(void *dummy)
 	disable_local_APIC();
 	mcheck_cpu_clear(this_cpu_ptr(&cpu_info));
 
-	for (;;)
-		halt();
+	for (;;) {
+		if (do_wbinvd_halt)
+			native_wbinvd_halt();
+		else
+			halt();
+	}
 }
 
 /*

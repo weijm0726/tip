@@ -58,6 +58,11 @@ static inline __cpuidle void native_halt(void)
 	asm volatile("hlt": : :"memory");
 }
 
+static inline __cpuidle void native_wbinvd_halt(void)
+{
+	asm volatile("wbinvd; hlt" : : : "memory");
+}
+
 #endif
 
 #ifdef CONFIG_PARAVIRT

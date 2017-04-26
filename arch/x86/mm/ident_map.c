@@ -20,6 +20,7 @@ static void ident_pmd_init(struct x86_mapping_info *info, pmd_t *pmd_page,
 static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 			  unsigned long addr, unsigned long end)
 {
+	unsigned long kernpg_flag = info->kernpg_flag ? : _KERNPG_TABLE;
 	unsigned long next;
 
 	for (; addr < end; addr = next) {
@@ -39,7 +40,7 @@ static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 		if (!pmd)
 			return -ENOMEM;
 		ident_pmd_init(info, pmd, addr, next);
-		set_pud(pud, __pud(__pa(pmd) | _KERNPG_TABLE));
+		set_pud(pud, __pud(__pa(pmd) | kernpg_flag));
 	}
 
 	return 0;
@@ -48,6 +49,7 @@ static int ident_pud_init(struct x86_mapping_info *info, pud_t *pud_page,
 static int ident_p4d_init(struct x86_mapping_info *info, p4d_t *p4d_page,
 			  unsigned long addr, unsigned long end)
 {
+	unsigned long kernpg_flag = info->kernpg_flag ? : _KERNPG_TABLE;
 	unsigned long next;
 
 	for (; addr < end; addr = next) {
@@ -67,7 +69,7 @@ static int ident_p4d_init(struct x86_mapping_info *info, p4d_t *p4d_page,
 		if (!pud)
 			return -ENOMEM;
 		ident_pud_init(info, pud, addr, next);
-		set_p4d(p4d, __p4d(__pa(pud) | _KERNPG_TABLE));
+		set_p4d(p4d, __p4d(__pa(pud) | kernpg_flag));
 	}
 
 	return 0;
@@ -76,6 +78,7 @@ static int ident_p4d_init(struct x86_mapping_info *info, p4d_t *p4d_page,
 int kernel_ident_mapping_init(struct x86_mapping_info *info, pgd_t *pgd_page,
 			      unsigned long pstart, unsigned long pend)
 {
+	unsigned long kernpg_flag = info->kernpg_flag ? : _KERNPG_TABLE;
 	unsigned long addr = pstart + info->offset;
 	unsigned long end = pend + info->offset;
 	unsigned long next;
@@ -104,14 +107,14 @@ int kernel_ident_mapping_init(struct x86_mapping_info *info, pgd_t *pgd_page,
 		if (result)
 			return result;
 		if (IS_ENABLED(CONFIG_X86_5LEVEL)) {
-			set_pgd(pgd, __pgd(__pa(p4d) | _KERNPG_TABLE));
+			set_pgd(pgd, __pgd(__pa(p4d) | kernpg_flag));
 		} else {
 			/*
 			 * With p4d folded, pgd is equal to p4d.
 			 * The pgd entry has to point to the pud page table in this case.
 			 */
 			pud_t *pud = pud_offset(p4d, 0);
-			set_pgd(pgd, __pgd(__pa(pud) | _KERNPG_TABLE));
+			set_pgd(pgd, __pgd(__pa(pud) | kernpg_flag));
 		}
 	}
 
