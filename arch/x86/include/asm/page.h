@@ -15,6 +15,8 @@
 
 #ifndef __ASSEMBLY__
 
+#include <asm/mem_encrypt.h>
+
 struct page;
 
 #include <linux/range.h>
@@ -55,7 +57,7 @@ static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
 	__phys_addr_symbol(__phys_reloc_hide((unsigned long)(x)))
 
 #ifndef __va
-#define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
+#define __va(x)			((void *)(__sme_clr(x) + PAGE_OFFSET))
 #endif
 
 #define __boot_va(x)		__va(x)
