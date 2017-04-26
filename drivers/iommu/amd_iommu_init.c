@@ -29,6 +29,7 @@
 #include <linux/export.h>
 #include <linux/iommu.h>
 #include <linux/kmemleak.h>
+#include <linux/mem_encrypt.h>
 #include <asm/pci-direct.h>
 #include <asm/iommu.h>
 #include <asm/gart.h>
@@ -2551,6 +2552,12 @@ int __init amd_iommu_detect(void)
 
 	if (amd_iommu_disabled)
 		return -ENODEV;
+
+	/* For now, disable the IOMMU if SME is active */
+	if (sme_active()) {
+		pr_notice("AMD-Vi: SME is active, disabling the IOMMU\n");
+		return -ENODEV;
+	}
 
 	ret = iommu_go_to_state(IOMMU_IVRS_DETECTED);
 	if (ret)
