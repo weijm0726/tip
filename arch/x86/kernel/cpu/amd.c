@@ -611,6 +611,21 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 	 */
 	if (cpu_has_amd_erratum(c, amd_erratum_400))
 		set_cpu_bug(c, X86_BUG_AMD_E400);
+
+	/*
+	 * BIOS support is required for SME. If BIOS has not enabled SME
+	 * then don't advertise the feature (set in scattered.c)
+	 */
+	if (c->extended_cpuid_level >= 0x8000001f) {
+		if (cpu_has(c, X86_FEATURE_SME)) {
+			u64 msr;
+
+			/* Check if SME is enabled */
+			rdmsrl(MSR_K8_SYSCFG, msr);
+			if (!(msr & MSR_K8_SYSCFG_MEM_ENCRYPT))
+				clear_cpu_cap(c, X86_FEATURE_SME);
+		}
+	}
 }
 
 static void init_amd_k8(struct cpuinfo_x86 *c)
