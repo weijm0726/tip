@@ -28,6 +28,8 @@
 #include <linux/workqueue.h>
 #include <linux/freezer.h>
 
+#include "posix-timers.h"
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/alarmtimer.h>
 
@@ -513,27 +515,97 @@ static enum alarmtimer_type clock2alarm(clockid_t clockid)
 static enum alarmtimer_restart alarm_handle_timer(struct alarm *alarm,
 							ktime_t now)
 {
-	unsigned long flags;
 	struct k_itimer *ptr = container_of(alarm, struct k_itimer,
-						it.alarm.alarmtimer);
+					    it.alarm.alarmtimer);
 	enum alarmtimer_restart result = ALARMTIMER_NORESTART;
+	unsigned long flags;
+	int si_private = 0;
 
 	spin_lock_irqsave(&ptr->it_lock, flags);
-	if ((ptr->it_sigev_notify & ~SIGEV_THREAD_ID) != SIGEV_NONE) {
-		if (IS_ENABLED(CONFIG_POSIX_TIMERS) &&
-		    posix_timer_event(ptr, 0) != 0)
-			ptr->it_overrun++;
-	}
 
-	/* Re-add periodic timers */
-	if (ptr->it.alarm.interval) {
-		ptr->it_overrun += alarm_forward(alarm, now,
-						ptr->it.alarm.interval);
+	ptr->it_active = 0;
+	if (ptr->it_interval)
+		si_private = ++ptr->it_requeue_pending;
+
+	if (posix_timer_event(ptr, si_private) && ptr->it_interval) {
+		/*
+		 * Handle ignored signals and rearm the timer. This will go
+		 * away once we handle ignored signals proper.
+		 */
+		ptr->it_overrun += alarm_forward_now(alarm, ptr->it_interval);
+		++ptr->it_requeue_pending;
+		ptr->it_active = 1;
 		result = ALARMTIMER_RESTART;
 	}
 	spin_unlock_irqrestore(&ptr->it_lock, flags);
 
 	return result;
+}
+
+/**
+ * alarm_timer_rearm - Posix timer callback for rearming timer
+ * @timr:	Pointer to the posixtimer data struct
+ */
+static void alarm_timer_rearm(struct k_itimer *timr)
+{
+	struct alarm *alarm = &timr->it.alarm.alarmtimer;
+
+	timr->it_overrun += alarm_forward_now(alarm, timr->it_interval);
+	alarm_start(alarm, alarm->node.expires);
+}
+
+/**
+ * alarm_timer_forward - Posix timer callback for forwarding timer
+ * @timr:	Pointer to the posixtimer data struct
+ * @now:	Current time to forward the timer against
+ */
+static int alarm_timer_forward(struct k_itimer *timr, ktime_t now)
+{
+	struct alarm *alarm = &timr->it.alarm.alarmtimer;
+
+	return (int) alarm_forward(alarm, timr->it_interval, now);
+}
+
+/**
+ * alarm_timer_remaining - Posix timer callback to retrieve remaining time
+ * @timr:	Pointer to the posixtimer data struct
+ * @now:	Current time to calculate against
+ */
+static ktime_t alarm_timer_remaining(struct k_itimer *timr, ktime_t now)
+{
+	struct alarm *alarm = &timr->it.alarm.alarmtimer;
+
+	return ktime_sub(now, alarm->node.expires);
+}
+
+/**
+ * alarm_timer_try_to_cancel - Posix timer callback to cancel a timer
+ * @timr:	Pointer to the posixtimer data struct
+ */
+static int alarm_timer_try_to_cancel(struct k_itimer *timr)
+{
+	return alarm_try_to_cancel(&timr->it.alarm.alarmtimer);
+}
+
+/**
+ * alarm_timer_arm - Posix timer callback to arm a timer
+ * @timr:	Pointer to the posixtimer data struct
+ * @expires:	The new expiry time
+ * @absolute:	Expiry value is absolute time
+ * @sigev_none:	Posix timer does not deliver signals
+ */
+static void alarm_timer_arm(struct k_itimer *timr, ktime_t expires,
+			    bool absolute, bool sigev_none)
+{
+	struct alarm *alarm = &timr->it.alarm.alarmtimer;
+	struct alarm_base *base = &alarm_bases[alarm->type];
+
+	if (!absolute)
+		expires = ktime_add_safe(expires, base->gettime());
+	if (sigev_none)
+		alarm->node.expires = expires;
+	else
+		alarm_start(&timr->it.alarm.alarmtimer, expires);
 }
 
 /**
@@ -589,97 +661,6 @@ static int alarm_timer_create(struct k_itimer *new_timer)
 
 	type = clock2alarm(new_timer->it_clock);
 	alarm_init(&new_timer->it.alarm.alarmtimer, type, alarm_handle_timer);
-	return 0;
-}
-
-/**
- * alarm_timer_get - posix timer_get interface
- * @new_timer: k_itimer pointer
- * @cur_setting: itimerspec data to fill
- *
- * Copies out the current itimerspec data
- */
-static void alarm_timer_get(struct k_itimer *timr,
-			    struct itimerspec64 *cur_setting)
-{
-	ktime_t relative_expiry_time =
-		alarm_expires_remaining(&(timr->it.alarm.alarmtimer));
-
-	if (ktime_to_ns(relative_expiry_time) > 0) {
-		cur_setting->it_value = ktime_to_timespec64(relative_expiry_time);
-	} else {
-		cur_setting->it_value.tv_sec = 0;
-		cur_setting->it_value.tv_nsec = 0;
-	}
-
-	cur_setting->it_interval = ktime_to_timespec64(timr->it.alarm.interval);
-}
-
-/**
- * alarm_timer_del - posix timer_del interface
- * @timr: k_itimer pointer to be deleted
- *
- * Cancels any programmed alarms for the given timer.
- */
-static int alarm_timer_del(struct k_itimer *timr)
-{
-	if (!rtcdev)
-		return -ENOTSUPP;
-
-	if (alarm_try_to_cancel(&timr->it.alarm.alarmtimer) < 0)
-		return TIMER_RETRY;
-
-	return 0;
-}
-
-/**
- * alarm_timer_set - posix timer_set interface
- * @timr: k_itimer pointer to be deleted
- * @flags: timer flags
- * @new_setting: itimerspec to be used
- * @old_setting: itimerspec being replaced
- *
- * Sets the timer to new_setting, and starts the timer.
- */
-static int alarm_timer_set(struct k_itimer *timr, int flags,
-			   struct itimerspec64 *new_setting,
-			   struct itimerspec64 *old_setting)
-{
-	ktime_t exp;
-
-	if (!rtcdev)
-		return -ENOTSUPP;
-
-	if (flags & ~TIMER_ABSTIME)
-		return -EINVAL;
-
-	if (old_setting)
-		alarm_timer_get(timr, old_setting);
-
-	/* If the timer was already set, cancel it */
-	if (alarm_try_to_cancel(&timr->it.alarm.alarmtimer) < 0)
-		return TIMER_RETRY;
-
-	/* start the timer */
-	timr->it.alarm.interval = timespec64_to_ktime(new_setting->it_interval);
-
-	/*
-	 * Rate limit to the tick as a hot fix to prevent DOS. Will be
-	 * mopped up later.
-	 */
-	if (timr->it.alarm.interval < TICK_NSEC)
-		timr->it.alarm.interval = TICK_NSEC;
-
-	exp = timespec64_to_ktime(new_setting->it_value);
-	/* Convert (if necessary) to absolute time */
-	if (flags != TIMER_ABSTIME) {
-		ktime_t now;
-
-		now = alarm_bases[timr->it.alarm.alarmtimer.type].gettime();
-		exp = ktime_add_safe(now, exp);
-	}
-
-	alarm_start(&timr->it.alarm.alarmtimer, exp);
 	return 0;
 }
 
@@ -857,13 +838,18 @@ out:
 }
 
 const struct k_clock alarm_clock = {
-	.clock_getres	= alarm_clock_getres,
-	.clock_get	= alarm_clock_get,
-	.timer_create	= alarm_timer_create,
-	.timer_set	= alarm_timer_set,
-	.timer_del	= alarm_timer_del,
-	.timer_get	= alarm_timer_get,
-	.nsleep		= alarm_timer_nsleep,
+	.clock_getres		= alarm_clock_getres,
+	.clock_get		= alarm_clock_get,
+	.timer_create		= alarm_timer_create,
+	.timer_set		= common_timer_set,
+	.timer_del		= common_timer_del,
+	.timer_get		= common_timer_get,
+	.timer_arm		= alarm_timer_arm,
+	.timer_rearm		= alarm_timer_rearm,
+	.timer_forward		= alarm_timer_forward,
+	.timer_remaining	= alarm_timer_remaining,
+	.timer_try_to_cancel	= alarm_timer_try_to_cancel,
+	.nsleep			= alarm_timer_nsleep,
 };
 #endif /* CONFIG_POSIX_TIMERS */
 
