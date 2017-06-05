@@ -234,6 +234,15 @@ static inline void clwb(volatile void *__p)
 
 #define nop() asm volatile ("nop")
 
+static inline unsigned long native_read_cr3_pa(void)
+{
+	return (native_read_cr3() & PHYSICAL_PAGE_MASK);
+}
+
+static inline unsigned long read_cr3_pa(void)
+{
+	return (read_cr3() & PHYSICAL_PAGE_MASK);
+}
 
 #endif /* __KERNEL__ */
 
