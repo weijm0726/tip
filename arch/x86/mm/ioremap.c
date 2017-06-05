@@ -21,6 +21,7 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 #include <asm/pat.h>
+#include <asm/mem_encrypt.h>
 
 #include "physaddr.h"
 
@@ -106,9 +107,11 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 	}
 
 	/*
-	 * Don't remap the low PCI/ISA area, it's always mapped..
+	 * Don't remap the low PCI/ISA area, it's always mapped.
+	 *   But if SME is active, skip this so that the encryption bit
+	 *   doesn't get set.
 	 */
-	if (is_ISA_range(phys_addr, last_addr))
+	if (is_ISA_range(phys_addr, last_addr) && !sme_active())
 		return (__force void __iomem *)phys_to_virt(phys_addr);
 
 	/*
