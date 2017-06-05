@@ -69,6 +69,14 @@ static inline bool sme_active(void)
 	return !!sme_me_mask;
 }
 
+static inline u64 sme_dma_mask(void)
+{
+	if (!sme_me_mask)
+		return 0ULL;
+
+	return ((u64)sme_me_mask << 1) - 1;
+}
+
 /*
  * The __sme_pa() and __sme_pa_nodebug() macros are meant for use when
  * writing to or comparing values from the cr3 register.  Having the

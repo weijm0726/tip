@@ -22,6 +22,11 @@ static inline bool sme_active(void)
 	return false;
 }
 
+static inline u64 sme_dma_mask(void)
+{
+	return 0ULL;
+}
+
 /*
  * The __sme_set() and __sme_clr() macros are useful for adding or removing
  * the encryption mask from a value (e.g. when dealing with pagetable
