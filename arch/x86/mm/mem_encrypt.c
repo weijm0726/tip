@@ -197,6 +197,36 @@ void __init sme_early_init(void)
 		protection_map[i] = pgprot_encrypted(protection_map[i]);
 }
 
+bool sme_iommu_supported(void)
+{
+	struct cpuinfo_x86 *c = &boot_cpu_data;
+
+	if (!sme_me_mask || (c->x86 != 0x17))
+		return true;
+
+	/* For Fam17h, a specific level of support is required */
+	switch (c->microcode & 0xf000) {
+	case 0x0000:
+		return false;
+	case 0x1000:
+		switch (c->microcode & 0x0f00) {
+		case 0x0000:
+			return false;
+		case 0x0100:
+			if ((c->microcode & 0xff) < 0x26)
+				return false;
+			break;
+		case 0x0200:
+			if ((c->microcode & 0xff) < 0x05)
+				return false;
+			break;
+		}
+		break;
+	}
+
+	return true;
+}
+
 /* Architecture __weak replacement functions */
 void __init mem_encrypt_init(void)
 {

@@ -31,6 +31,8 @@ void __init sme_unmap_bootdata(char *real_mode_data);
 
 void __init sme_early_init(void);
 
+bool sme_iommu_supported(void);
+
 /* Architecture __weak replacement functions */
 void __init mem_encrypt_init(void);
 
@@ -60,6 +62,11 @@ static inline void __init sme_unmap_bootdata(char *real_mode_data)
 
 static inline void __init sme_early_init(void)
 {
+}
+
+static inline bool sme_iommu_supported(void)
+{
+	return true;
 }
 
 #endif	/* CONFIG_AMD_MEM_ENCRYPT */
