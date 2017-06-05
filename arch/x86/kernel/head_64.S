@@ -97,6 +97,7 @@ startup_64:
 	 * Save the returned mask in %r12 for later use.
 	 */
 	push	%rsi
+	movq	%rsi, %rdi
 	call	sme_enable
 	pop	%rsi
 	movq	%rax, %r12
