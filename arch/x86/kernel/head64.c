@@ -43,7 +43,7 @@ static void __init *fixup_pointer(void *ptr, unsigned long physaddr)
 	return ptr - (void *)_text + (void *)physaddr;
 }
 
-void __init __startup_64(unsigned long physaddr)
+void __init __startup_64(unsigned long physaddr, struct boot_params *bp)
 {
 	unsigned long load_delta, *p;
 	unsigned long pgtable_flags;
@@ -68,7 +68,7 @@ void __init __startup_64(unsigned long physaddr)
 		for (;;);
 
 	/* Activate Secure Memory Encryption (SME) if supported and enabled */
-	sme_enable();
+	sme_enable(bp);
 
 	/* Include the SME encryption mask in the fixup value */
 	load_delta += sme_get_me_mask();
