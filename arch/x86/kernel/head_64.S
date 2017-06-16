@@ -78,7 +78,29 @@ startup_64:
 	call	__startup_64
 	popq	%rsi
 
-	movq	$(early_top_pgt - __START_KERNEL_map), %rax
+	/*
+	 * Encrypt the kernel if SME is active.
+	 * The real_mode_data address is in %rsi and that register can be
+	 * clobbered by the called function so be sure to save it.
+	 */
+	push	%rsi
+	call	sme_encrypt_kernel
+	pop	%rsi
+
+	/*
+	 * Get the SME encryption mask.
+	 *  The encryption mask will be returned in %rax so we do an ADD
+	 *  below to be sure that the encryption mask is part of the
+	 *  value that will stored in %cr3.
+	 *
+	 * The real_mode_data address is in %rsi and that register can be
+	 * clobbered by the called function so be sure to save it.
+	 */
+	push	%rsi
+	call	sme_get_me_mask
+	pop	%rsi
+
+	addq	$(early_top_pgt - __START_KERNEL_map), %rax
 	jmp 1f
 ENTRY(secondary_startup_64)
 	/*
@@ -98,7 +120,20 @@ ENTRY(secondary_startup_64)
 	/* Sanitize CPU configuration */
 	call verify_cpu
 
-	movq	$(init_top_pgt - __START_KERNEL_map), %rax
+	/*
+	 * Get the SME encryption mask.
+	 *  The encryption mask will be returned in %rax so we do an ADD
+	 *  below to be sure that the encryption mask is part of the
+	 *  value that will stored in %cr3.
+	 *
+	 * The real_mode_data address is in %rsi and that register can be
+	 * clobbered by the called function so be sure to save it.
+	 */
+	push	%rsi
+	call	sme_get_me_mask
+	pop	%rsi
+
+	addq	$(init_top_pgt - __START_KERNEL_map), %rax
 1:
 
 	/* Enable PAE mode, PGE and LA57 */
