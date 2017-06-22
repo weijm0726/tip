@@ -274,7 +274,8 @@ struct irq_domain *msi_create_irq_domain(struct fwnode_handle *fwnode,
 
 	domain = irq_domain_create_hierarchy(parent, IRQ_DOMAIN_FLAG_MSI, 0,
 					     fwnode, &msi_domain_ops, info);
-	if (domain && info->chip && info->chip->name)
+
+	if (domain && !domain->name && info->chip)
 		domain->name = info->chip->name;
 
 	return domain;
@@ -314,7 +315,7 @@ int msi_domain_populate_irqs(struct irq_domain *domain, struct device *dev,
 
 		ops->set_desc(arg, desc);
 		/* Assumes the domain mutex is held! */
-		ret = irq_domain_alloc_irqs_recursive(domain, virq, 1, arg);
+		ret = irq_domain_alloc_irqs_hierarchy(domain, virq, 1, arg);
 		if (ret)
 			break;
 

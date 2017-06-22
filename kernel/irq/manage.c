@@ -168,34 +168,6 @@ void irq_set_thread_affinity(struct irq_desc *desc)
 			set_bit(IRQTF_AFFINITY, &action->thread_flags);
 }
 
-#ifdef CONFIG_GENERIC_PENDING_IRQ
-static inline bool irq_can_move_pcntxt(struct irq_data *data)
-{
-	return irqd_can_move_in_process_context(data);
-}
-static inline bool irq_move_pending(struct irq_data *data)
-{
-	return irqd_is_setaffinity_pending(data);
-}
-static inline void
-irq_copy_pending(struct irq_desc *desc, const struct cpumask *mask)
-{
-	cpumask_copy(desc->pending_mask, mask);
-}
-static inline void
-irq_get_pending(struct cpumask *mask, struct irq_desc *desc)
-{
-	cpumask_copy(mask, desc->pending_mask);
-}
-#else
-static inline bool irq_can_move_pcntxt(struct irq_data *data) { return true; }
-static inline bool irq_move_pending(struct irq_data *data) { return false; }
-static inline void
-irq_copy_pending(struct irq_desc *desc, const struct cpumask *mask) { }
-static inline void
-irq_get_pending(struct cpumask *mask, struct irq_desc *desc) { }
-#endif
-
 int irq_do_set_affinity(struct irq_data *data, const struct cpumask *mask,
 			bool force)
 {
@@ -345,15 +317,18 @@ EXPORT_SYMBOL_GPL(irq_set_affinity_notifier);
 /*
  * Generic version of the affinity autoselector.
  */
-static int setup_affinity(struct irq_desc *desc, struct cpumask *mask)
+int irq_setup_affinity(struct irq_desc *desc)
 {
 	struct cpumask *set = irq_default_affinity;
-	int node = irq_desc_get_node(desc);
+	int ret, node = irq_desc_get_node(desc);
+	static DEFINE_RAW_SPINLOCK(mask_lock);
+	static struct cpumask mask;
 
 	/* Excludes PER_CPU and NO_BALANCE interrupts */
 	if (!__irq_can_set_affinity(desc))
 		return 0;
 
+	raw_spin_lock(&mask_lock);
 	/*
 	 * Preserve the managed affinity setting and a userspace affinity
 	 * setup, but make sure that one of the targets is online.
@@ -367,45 +342,39 @@ static int setup_affinity(struct irq_desc *desc, struct cpumask *mask)
 			irqd_clear(&desc->irq_data, IRQD_AFFINITY_SET);
 	}
 
-	cpumask_and(mask, cpu_online_mask, set);
+	cpumask_and(&mask, cpu_online_mask, set);
 	if (node != NUMA_NO_NODE) {
 		const struct cpumask *nodemask = cpumask_of_node(node);
 
 		/* make sure at least one of the cpus in nodemask is online */
-		if (cpumask_intersects(mask, nodemask))
-			cpumask_and(mask, mask, nodemask);
+		if (cpumask_intersects(&mask, nodemask))
+			cpumask_and(&mask, &mask, nodemask);
 	}
-	irq_do_set_affinity(&desc->irq_data, mask, false);
-	return 0;
+	ret = irq_do_set_affinity(&desc->irq_data, &mask, false);
+	raw_spin_unlock(&mask_lock);
+	return ret;
 }
 #else
 /* Wrapper for ALPHA specific affinity selector magic */
-static inline int setup_affinity(struct irq_desc *d, struct cpumask *mask)
+int irq_setup_affinity(struct irq_desc *desc)
 {
-	return irq_select_affinity(irq_desc_get_irq(d));
+	return irq_select_affinity(irq_desc_get_irq(desc));
 }
 #endif
 
 /*
- * Called when affinity is set via /proc/irq
+ * Called when a bogus affinity is set via /proc/irq
  */
-int irq_select_affinity_usr(unsigned int irq, struct cpumask *mask)
+int irq_select_affinity_usr(unsigned int irq)
 {
 	struct irq_desc *desc = irq_to_desc(irq);
 	unsigned long flags;
 	int ret;
 
 	raw_spin_lock_irqsave(&desc->lock, flags);
-	ret = setup_affinity(desc, mask);
+	ret = irq_setup_affinity(desc);
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 	return ret;
-}
-
-#else
-static inline int
-setup_affinity(struct irq_desc *desc, struct cpumask *mask)
-{
-	return 0;
 }
 #endif
 
@@ -540,7 +509,7 @@ void __enable_irq(struct irq_desc *desc)
 		 * time. If it was already started up, then irq_startup()
 		 * will invoke irq_enable() under the hood.
 		 */
-		irq_startup(desc, true);
+		irq_startup(desc, IRQ_RESEND, IRQ_START_COND);
 		break;
 	}
 	default:
@@ -1128,7 +1097,6 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	struct irqaction *old, **old_ptr;
 	unsigned long flags, thread_mask = 0;
 	int ret, nested, shared = 0;
-	cpumask_var_t mask;
 
 	if (!desc)
 		return -EINVAL;
@@ -1185,11 +1153,6 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 			if (ret)
 				goto out_thread;
 		}
-	}
-
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL)) {
-		ret = -ENOMEM;
-		goto out_thread;
 	}
 
 	/*
@@ -1256,7 +1219,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 		 */
 		if (thread_mask == ~0UL) {
 			ret = -EBUSY;
-			goto out_mask;
+			goto out_unlock;
 		}
 		/*
 		 * The thread_mask for the action is or'ed to
@@ -1300,7 +1263,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 		pr_err("Threaded irq requested with handler=NULL and !ONESHOT for irq %d\n",
 		       irq);
 		ret = -EINVAL;
-		goto out_mask;
+		goto out_unlock;
 	}
 
 	if (!shared) {
@@ -1308,7 +1271,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 		if (ret) {
 			pr_err("Failed to request resources for %s (irq %d) on irqchip %s\n",
 			       new->name, irq, desc->irq_data.chip->name);
-			goto out_mask;
+			goto out_unlock;
 		}
 
 		init_waitqueue_head(&desc->wait_for_threads);
@@ -1320,7 +1283,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 
 			if (ret) {
 				irq_release_resources(desc);
-				goto out_mask;
+				goto out_unlock;
 			}
 		}
 
@@ -1336,8 +1299,14 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 		if (new->flags & IRQF_ONESHOT)
 			desc->istate |= IRQS_ONESHOT;
 
+		/* Exclude IRQ from balancing if requested */
+		if (new->flags & IRQF_NOBALANCING) {
+			irq_settings_set_no_balancing(desc);
+			irqd_set(&desc->irq_data, IRQD_NO_BALANCING);
+		}
+
 		if (irq_settings_can_autoenable(desc)) {
-			irq_startup(desc, true);
+			irq_startup(desc, IRQ_RESEND, IRQ_START_COND);
 		} else {
 			/*
 			 * Shared interrupts do not go well with disabling
@@ -1349,15 +1318,6 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 			/* Undo nested disables: */
 			desc->depth = 1;
 		}
-
-		/* Exclude IRQ from balancing if requested */
-		if (new->flags & IRQF_NOBALANCING) {
-			irq_settings_set_no_balancing(desc);
-			irqd_set(&desc->irq_data, IRQD_NO_BALANCING);
-		}
-
-		/* Set default affinity mask once everything is setup */
-		setup_affinity(desc, mask);
 
 	} else if (new->flags & IRQF_TRIGGER_MASK) {
 		unsigned int nmsk = new->flags & IRQF_TRIGGER_MASK;
@@ -1398,10 +1358,9 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 		wake_up_process(new->secondary->thread);
 
 	register_irq_proc(irq, desc);
+	irq_add_debugfs_entry(irq, desc);
 	new->dir = NULL;
 	register_handler_proc(irq, new);
-	free_cpumask_var(mask);
-
 	return 0;
 
 mismatch:
@@ -1414,9 +1373,8 @@ mismatch:
 	}
 	ret = -EBUSY;
 
-out_mask:
+out_unlock:
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
-	free_cpumask_var(mask);
 
 out_thread:
 	if (new->thread) {

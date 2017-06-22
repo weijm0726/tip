@@ -54,14 +54,25 @@ static void __init init_irq_default_affinity(void)
 #endif
 
 #ifdef CONFIG_SMP
-static int alloc_masks(struct irq_desc *desc, gfp_t gfp, int node)
+static int alloc_masks(struct irq_desc *desc, int node)
 {
 	if (!zalloc_cpumask_var_node(&desc->irq_common_data.affinity,
-				     gfp, node))
+				     GFP_KERNEL, node))
 		return -ENOMEM;
 
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+	if (!zalloc_cpumask_var_node(&desc->irq_common_data.effective_affinity,
+				     GFP_KERNEL, node)) {
+		free_cpumask_var(desc->irq_common_data.affinity);
+		return -ENOMEM;
+	}
+#endif
+
 #ifdef CONFIG_GENERIC_PENDING_IRQ
-	if (!zalloc_cpumask_var_node(&desc->pending_mask, gfp, node)) {
+	if (!zalloc_cpumask_var_node(&desc->pending_mask, GFP_KERNEL, node)) {
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+		free_cpumask_var(desc->irq_common_data.effective_affinity);
+#endif
 		free_cpumask_var(desc->irq_common_data.affinity);
 		return -ENOMEM;
 	}
@@ -86,7 +97,7 @@ static void desc_smp_init(struct irq_desc *desc, int node,
 
 #else
 static inline int
-alloc_masks(struct irq_desc *desc, gfp_t gfp, int node) { return 0; }
+alloc_masks(struct irq_desc *desc, int node) { return 0; }
 static inline void
 desc_smp_init(struct irq_desc *desc, int node, const struct cpumask *affinity) { }
 #endif
@@ -324,6 +335,9 @@ static void free_masks(struct irq_desc *desc)
 	free_cpumask_var(desc->pending_mask);
 #endif
 	free_cpumask_var(desc->irq_common_data.affinity);
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+	free_cpumask_var(desc->irq_common_data.effective_affinity);
+#endif
 }
 #else
 static inline void free_masks(struct irq_desc *desc) { }
@@ -344,9 +358,8 @@ static struct irq_desc *alloc_desc(int irq, int node, unsigned int flags,
 				   struct module *owner)
 {
 	struct irq_desc *desc;
-	gfp_t gfp = GFP_KERNEL;
 
-	desc = kzalloc_node(sizeof(*desc), gfp, node);
+	desc = kzalloc_node(sizeof(*desc), GFP_KERNEL, node);
 	if (!desc)
 		return NULL;
 	/* allocate based on nr_cpu_ids */
@@ -354,7 +367,7 @@ static struct irq_desc *alloc_desc(int irq, int node, unsigned int flags,
 	if (!desc->kstat_irqs)
 		goto err_desc;
 
-	if (alloc_masks(desc, gfp, node))
+	if (alloc_masks(desc, node))
 		goto err_kstat;
 
 	raw_spin_lock_init(&desc->lock);
@@ -394,6 +407,7 @@ static void free_desc(unsigned int irq)
 {
 	struct irq_desc *desc = irq_to_desc(irq);
 
+	irq_remove_debugfs_entry(desc);
 	unregister_irq_proc(irq, desc);
 
 	/*
@@ -524,7 +538,7 @@ int __init early_irq_init(void)
 
 	for (i = 0; i < count; i++) {
 		desc[i].kstat_irqs = alloc_percpu(unsigned int);
-		alloc_masks(&desc[i], GFP_KERNEL, node);
+		alloc_masks(&desc[i], node);
 		raw_spin_lock_init(&desc[i].lock);
 		lockdep_set_class(&desc[i].lock, &irq_desc_lock_class);
 		desc_set_defaults(i, &desc[i], node, NULL, NULL);
