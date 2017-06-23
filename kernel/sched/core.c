@@ -2142,25 +2142,6 @@ int wake_up_state(struct task_struct *p, unsigned int state)
 }
 
 /*
- * This function clears the sched_dl_entity static params.
- */
-void __dl_clear_params(struct task_struct *p)
-{
-	struct sched_dl_entity *dl_se = &p->dl;
-
-	dl_se->dl_runtime = 0;
-	dl_se->dl_deadline = 0;
-	dl_se->dl_period = 0;
-	dl_se->flags = 0;
-	dl_se->dl_bw = 0;
-	dl_se->dl_density = 0;
-
-	dl_se->dl_throttled = 0;
-	dl_se->dl_yielded = 0;
-	dl_se->dl_non_contending = 0;
-}
-
-/*
  * Perform scheduler related setup for a newly forked process p.
  * p is forked by current.
  *
@@ -2439,101 +2420,6 @@ unsigned long to_ratio(u64 period, u64 runtime)
 
 	return div64_u64(runtime << BW_SHIFT, period);
 }
-
-#ifdef CONFIG_SMP
-inline struct dl_bw *dl_bw_of(int i)
-{
-	RCU_LOCKDEP_WARN(!rcu_read_lock_sched_held(),
-			 "sched RCU must be held");
-	return &cpu_rq(i)->rd->dl_bw;
-}
-
-inline int dl_bw_cpus(int i)
-{
-	struct root_domain *rd = cpu_rq(i)->rd;
-	int cpus = 0;
-
-	RCU_LOCKDEP_WARN(!rcu_read_lock_sched_held(),
-			 "sched RCU must be held");
-	for_each_cpu_and(i, rd->span, cpu_active_mask)
-		cpus++;
-
-	return cpus;
-}
-#else
-inline struct dl_bw *dl_bw_of(int i)
-{
-	return &cpu_rq(i)->dl.dl_bw;
-}
-
-inline int dl_bw_cpus(int i)
-{
-	return 1;
-}
-#endif
-
-/*
- * We must be sure that accepting a new task (or allowing changing the
- * parameters of an existing one) is consistent with the bandwidth
- * constraints. If yes, this function also accordingly updates the currently
- * allocated bandwidth to reflect the new situation.
- *
- * This function is called while holding p's rq->lock.
- */
-static int dl_overflow(struct task_struct *p, int policy,
-		       const struct sched_attr *attr)
-{
-
-	struct dl_bw *dl_b = dl_bw_of(task_cpu(p));
-	u64 period = attr->sched_period ?: attr->sched_deadline;
-	u64 runtime = attr->sched_runtime;
-	u64 new_bw = dl_policy(policy) ? to_ratio(period, runtime) : 0;
-	int cpus, err = -1;
-
-	/* !deadline task may carry old deadline bandwidth */
-	if (new_bw == p->dl.dl_bw && task_has_dl_policy(p))
-		return 0;
-
-	/*
-	 * Either if a task, enters, leave, or stays -deadline but changes
-	 * its parameters, we may need to update accordingly the total
-	 * allocated bandwidth of the container.
-	 */
-	raw_spin_lock(&dl_b->lock);
-	cpus = dl_bw_cpus(task_cpu(p));
-	if (dl_policy(policy) && !task_has_dl_policy(p) &&
-	    !__dl_overflow(dl_b, cpus, 0, new_bw)) {
-		if (hrtimer_active(&p->dl.inactive_timer))
-			__dl_clear(dl_b, p->dl.dl_bw, cpus);
-		__dl_add(dl_b, new_bw, cpus);
-		err = 0;
-	} else if (dl_policy(policy) && task_has_dl_policy(p) &&
-		   !__dl_overflow(dl_b, cpus, p->dl.dl_bw, new_bw)) {
-		/*
-		 * XXX this is slightly incorrect: when the task
-		 * utilization decreases, we should delay the total
-		 * utilization change until the task's 0-lag point.
-		 * But this would require to set the task's "inactive
-		 * timer" when the task is not inactive.
-		 */
-		__dl_clear(dl_b, p->dl.dl_bw, cpus);
-		__dl_add(dl_b, new_bw, cpus);
-		dl_change_utilization(p, new_bw);
-		err = 0;
-	} else if (!dl_policy(policy) && task_has_dl_policy(p)) {
-		/*
-		 * Do not decrease the total deadline utilization here,
-		 * switched_from_dl() will take care to do it at the correct
-		 * (0-lag) time.
-		 */
-		err = 0;
-	}
-	raw_spin_unlock(&dl_b->lock);
-
-	return err;
-}
-
-extern void init_dl_bw(struct dl_bw *dl_b);
 
 /*
  * wake_up_new_task - wake up a newly created task for the first time.
@@ -4017,27 +3903,6 @@ static struct task_struct *find_process_by_pid(pid_t pid)
 }
 
 /*
- * This function initializes the sched_dl_entity of a newly becoming
- * SCHED_DEADLINE task.
- *
- * Only the static values are considered here, the actual runtime and the
- * absolute deadline will be properly calculated when the task is enqueued
- * for the first time with its new policy.
- */
-static void
-__setparam_dl(struct task_struct *p, const struct sched_attr *attr)
-{
-	struct sched_dl_entity *dl_se = &p->dl;
-
-	dl_se->dl_runtime = attr->sched_runtime;
-	dl_se->dl_deadline = attr->sched_deadline;
-	dl_se->dl_period = attr->sched_period ?: dl_se->dl_deadline;
-	dl_se->flags = attr->sched_flags;
-	dl_se->dl_bw = to_ratio(dl_se->dl_period, dl_se->dl_runtime);
-	dl_se->dl_density = to_ratio(dl_se->dl_deadline, dl_se->dl_runtime);
-}
-
-/*
  * sched_setparam() passes in -1 for its policy, to let the functions
  * it calls know not to change it.
  */
@@ -4090,59 +3955,6 @@ static void __setscheduler(struct rq *rq, struct task_struct *p,
 		p->sched_class = &fair_sched_class;
 }
 
-static void
-__getparam_dl(struct task_struct *p, struct sched_attr *attr)
-{
-	struct sched_dl_entity *dl_se = &p->dl;
-
-	attr->sched_priority = p->rt_priority;
-	attr->sched_runtime = dl_se->dl_runtime;
-	attr->sched_deadline = dl_se->dl_deadline;
-	attr->sched_period = dl_se->dl_period;
-	attr->sched_flags = dl_se->flags;
-}
-
-/*
- * This function validates the new parameters of a -deadline task.
- * We ask for the deadline not being zero, and greater or equal
- * than the runtime, as well as the period of being zero or
- * greater than deadline. Furthermore, we have to be sure that
- * user parameters are above the internal resolution of 1us (we
- * check sched_runtime only since it is always the smaller one) and
- * below 2^63 ns (we have to check both sched_deadline and
- * sched_period, as the latter can be zero).
- */
-static bool
-__checkparam_dl(const struct sched_attr *attr)
-{
-	/* deadline != 0 */
-	if (attr->sched_deadline == 0)
-		return false;
-
-	/*
-	 * Since we truncate DL_SCALE bits, make sure we're at least
-	 * that big.
-	 */
-	if (attr->sched_runtime < (1ULL << DL_SCALE))
-		return false;
-
-	/*
-	 * Since we use the MSB for wrap-around and sign issues, make
-	 * sure it's not set (mind that period can be equal to zero).
-	 */
-	if (attr->sched_deadline & (1ULL << 63) ||
-	    attr->sched_period & (1ULL << 63))
-		return false;
-
-	/* runtime <= deadline <= period (if period != 0) */
-	if ((attr->sched_period != 0 &&
-	     attr->sched_period < attr->sched_deadline) ||
-	    attr->sched_deadline < attr->sched_runtime)
-		return false;
-
-	return true;
-}
-
 /*
  * Check the target process has a UID that matches the current process's:
  */
@@ -4157,19 +3969,6 @@ static bool check_same_owner(struct task_struct *p)
 		 uid_eq(cred->euid, pcred->uid));
 	rcu_read_unlock();
 	return match;
-}
-
-static bool dl_param_changed(struct task_struct *p, const struct sched_attr *attr)
-{
-	struct sched_dl_entity *dl_se = &p->dl;
-
-	if (dl_se->dl_runtime != attr->sched_runtime ||
-		dl_se->dl_deadline != attr->sched_deadline ||
-		dl_se->dl_period != attr->sched_period ||
-		dl_se->flags != attr->sched_flags)
-		return true;
-
-	return false;
 }
 
 static int __sched_setscheduler(struct task_struct *p,
@@ -4352,7 +4151,7 @@ change:
 	 * of a SCHED_DEADLINE task) we need to check if enough bandwidth
 	 * is available.
 	 */
-	if ((dl_policy(policy) || dl_task(p)) && dl_overflow(p, policy, attr)) {
+	if ((dl_policy(policy) || dl_task(p)) && sched_dl_overflow(p, policy, attr)) {
 		task_rq_unlock(rq, p, &rf);
 		return -EBUSY;
 	}
@@ -5453,26 +5252,17 @@ void init_idle(struct task_struct *idle, int cpu)
 #endif
 }
 
+#ifdef CONFIG_SMP
+
 int cpuset_cpumask_can_shrink(const struct cpumask *cur,
 			      const struct cpumask *trial)
 {
-	int ret = 1, trial_cpus;
-	struct dl_bw *cur_dl_b;
-	unsigned long flags;
+	int ret = 1;
 
 	if (!cpumask_weight(cur))
 		return ret;
 
-	rcu_read_lock_sched();
-	cur_dl_b = dl_bw_of(cpumask_any(cur));
-	trial_cpus = cpumask_weight(trial);
-
-	raw_spin_lock_irqsave(&cur_dl_b->lock, flags);
-	if (cur_dl_b->bw != -1 &&
-	    cur_dl_b->bw * trial_cpus < cur_dl_b->total_bw)
-		ret = 0;
-	raw_spin_unlock_irqrestore(&cur_dl_b->lock, flags);
-	rcu_read_unlock_sched();
+	ret = dl_cpuset_cpumask_can_shrink(cur, trial);
 
 	return ret;
 }
@@ -5496,42 +5286,13 @@ int task_can_attach(struct task_struct *p,
 		goto out;
 	}
 
-#ifdef CONFIG_SMP
 	if (dl_task(p) && !cpumask_intersects(task_rq(p)->rd->span,
-					      cs_cpus_allowed)) {
-		unsigned int dest_cpu = cpumask_any_and(cpu_active_mask,
-							cs_cpus_allowed);
-		struct dl_bw *dl_b;
-		bool overflow;
-		int cpus;
-		unsigned long flags;
+					      cs_cpus_allowed))
+		ret = dl_task_can_attach(p, cs_cpus_allowed);
 
-		rcu_read_lock_sched();
-		dl_b = dl_bw_of(dest_cpu);
-		raw_spin_lock_irqsave(&dl_b->lock, flags);
-		cpus = dl_bw_cpus(dest_cpu);
-		overflow = __dl_overflow(dl_b, cpus, 0, p->dl.dl_bw);
-		if (overflow)
-			ret = -EBUSY;
-		else {
-			/*
-			 * We reserve space for this task in the destination
-			 * root_domain, as we can't fail after this point.
-			 * We will free resources in the source root_domain
-			 * later on (see set_cpus_allowed_dl()).
-			 */
-			__dl_add(dl_b, p->dl.dl_bw, cpus);
-		}
-		raw_spin_unlock_irqrestore(&dl_b->lock, flags);
-		rcu_read_unlock_sched();
-
-	}
-#endif
 out:
 	return ret;
 }
-
-#ifdef CONFIG_SMP
 
 bool sched_smp_initialized __read_mostly;
 
@@ -5795,23 +5556,8 @@ static void cpuset_cpu_active(void)
 
 static int cpuset_cpu_inactive(unsigned int cpu)
 {
-	unsigned long flags;
-	struct dl_bw *dl_b;
-	bool overflow;
-	int cpus;
-
 	if (!cpuhp_tasks_frozen) {
-		rcu_read_lock_sched();
-		dl_b = dl_bw_of(cpu);
-
-		raw_spin_lock_irqsave(&dl_b->lock, flags);
-		cpus = dl_bw_cpus(cpu);
-		overflow = __dl_overflow(dl_b, cpus, 0, 0);
-		raw_spin_unlock_irqrestore(&dl_b->lock, flags);
-
-		rcu_read_unlock_sched();
-
-		if (overflow)
+		if (dl_cpu_busy(cpu))
 			return -EBUSY;
 		cpuset_update_active_cpus();
 	} else {
@@ -6474,399 +6220,6 @@ void sched_move_task(struct task_struct *tsk)
 
 	task_rq_unlock(rq, tsk, &rf);
 }
-#endif /* CONFIG_CGROUP_SCHED */
-
-#ifdef CONFIG_RT_GROUP_SCHED
-/*
- * Ensure that the real time constraints are schedulable.
- */
-static DEFINE_MUTEX(rt_constraints_mutex);
-
-/* Must be called with tasklist_lock held */
-static inline int tg_has_rt_tasks(struct task_group *tg)
-{
-	struct task_struct *g, *p;
-
-	/*
-	 * Autogroups do not have RT tasks; see autogroup_create().
-	 */
-	if (task_group_is_autogroup(tg))
-		return 0;
-
-	for_each_process_thread(g, p) {
-		if (rt_task(p) && task_group(p) == tg)
-			return 1;
-	}
-
-	return 0;
-}
-
-struct rt_schedulable_data {
-	struct task_group *tg;
-	u64 rt_period;
-	u64 rt_runtime;
-};
-
-static int tg_rt_schedulable(struct task_group *tg, void *data)
-{
-	struct rt_schedulable_data *d = data;
-	struct task_group *child;
-	unsigned long total, sum = 0;
-	u64 period, runtime;
-
-	period = ktime_to_ns(tg->rt_bandwidth.rt_period);
-	runtime = tg->rt_bandwidth.rt_runtime;
-
-	if (tg == d->tg) {
-		period = d->rt_period;
-		runtime = d->rt_runtime;
-	}
-
-	/*
-	 * Cannot have more runtime than the period.
-	 */
-	if (runtime > period && runtime != RUNTIME_INF)
-		return -EINVAL;
-
-	/*
-	 * Ensure we don't starve existing RT tasks.
-	 */
-	if (rt_bandwidth_enabled() && !runtime && tg_has_rt_tasks(tg))
-		return -EBUSY;
-
-	total = to_ratio(period, runtime);
-
-	/*
-	 * Nobody can have more than the global setting allows.
-	 */
-	if (total > to_ratio(global_rt_period(), global_rt_runtime()))
-		return -EINVAL;
-
-	/*
-	 * The sum of our children's runtime should not exceed our own.
-	 */
-	list_for_each_entry_rcu(child, &tg->children, siblings) {
-		period = ktime_to_ns(child->rt_bandwidth.rt_period);
-		runtime = child->rt_bandwidth.rt_runtime;
-
-		if (child == d->tg) {
-			period = d->rt_period;
-			runtime = d->rt_runtime;
-		}
-
-		sum += to_ratio(period, runtime);
-	}
-
-	if (sum > total)
-		return -EINVAL;
-
-	return 0;
-}
-
-static int __rt_schedulable(struct task_group *tg, u64 period, u64 runtime)
-{
-	int ret;
-
-	struct rt_schedulable_data data = {
-		.tg = tg,
-		.rt_period = period,
-		.rt_runtime = runtime,
-	};
-
-	rcu_read_lock();
-	ret = walk_tg_tree(tg_rt_schedulable, tg_nop, &data);
-	rcu_read_unlock();
-
-	return ret;
-}
-
-static int tg_set_rt_bandwidth(struct task_group *tg,
-		u64 rt_period, u64 rt_runtime)
-{
-	int i, err = 0;
-
-	/*
-	 * Disallowing the root group RT runtime is BAD, it would disallow the
-	 * kernel creating (and or operating) RT threads.
-	 */
-	if (tg == &root_task_group && rt_runtime == 0)
-		return -EINVAL;
-
-	/* No period doesn't make any sense. */
-	if (rt_period == 0)
-		return -EINVAL;
-
-	mutex_lock(&rt_constraints_mutex);
-	read_lock(&tasklist_lock);
-	err = __rt_schedulable(tg, rt_period, rt_runtime);
-	if (err)
-		goto unlock;
-
-	raw_spin_lock_irq(&tg->rt_bandwidth.rt_runtime_lock);
-	tg->rt_bandwidth.rt_period = ns_to_ktime(rt_period);
-	tg->rt_bandwidth.rt_runtime = rt_runtime;
-
-	for_each_possible_cpu(i) {
-		struct rt_rq *rt_rq = tg->rt_rq[i];
-
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-		rt_rq->rt_runtime = rt_runtime;
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-	}
-	raw_spin_unlock_irq(&tg->rt_bandwidth.rt_runtime_lock);
-unlock:
-	read_unlock(&tasklist_lock);
-	mutex_unlock(&rt_constraints_mutex);
-
-	return err;
-}
-
-static int sched_group_set_rt_runtime(struct task_group *tg, long rt_runtime_us)
-{
-	u64 rt_runtime, rt_period;
-
-	rt_period = ktime_to_ns(tg->rt_bandwidth.rt_period);
-	rt_runtime = (u64)rt_runtime_us * NSEC_PER_USEC;
-	if (rt_runtime_us < 0)
-		rt_runtime = RUNTIME_INF;
-
-	return tg_set_rt_bandwidth(tg, rt_period, rt_runtime);
-}
-
-static long sched_group_rt_runtime(struct task_group *tg)
-{
-	u64 rt_runtime_us;
-
-	if (tg->rt_bandwidth.rt_runtime == RUNTIME_INF)
-		return -1;
-
-	rt_runtime_us = tg->rt_bandwidth.rt_runtime;
-	do_div(rt_runtime_us, NSEC_PER_USEC);
-	return rt_runtime_us;
-}
-
-static int sched_group_set_rt_period(struct task_group *tg, u64 rt_period_us)
-{
-	u64 rt_runtime, rt_period;
-
-	rt_period = rt_period_us * NSEC_PER_USEC;
-	rt_runtime = tg->rt_bandwidth.rt_runtime;
-
-	return tg_set_rt_bandwidth(tg, rt_period, rt_runtime);
-}
-
-static long sched_group_rt_period(struct task_group *tg)
-{
-	u64 rt_period_us;
-
-	rt_period_us = ktime_to_ns(tg->rt_bandwidth.rt_period);
-	do_div(rt_period_us, NSEC_PER_USEC);
-	return rt_period_us;
-}
-#endif /* CONFIG_RT_GROUP_SCHED */
-
-#ifdef CONFIG_RT_GROUP_SCHED
-static int sched_rt_global_constraints(void)
-{
-	int ret = 0;
-
-	mutex_lock(&rt_constraints_mutex);
-	read_lock(&tasklist_lock);
-	ret = __rt_schedulable(NULL, 0, 0);
-	read_unlock(&tasklist_lock);
-	mutex_unlock(&rt_constraints_mutex);
-
-	return ret;
-}
-
-static int sched_rt_can_attach(struct task_group *tg, struct task_struct *tsk)
-{
-	/* Don't accept realtime tasks when there is no way for them to run */
-	if (rt_task(tsk) && tg->rt_bandwidth.rt_runtime == 0)
-		return 0;
-
-	return 1;
-}
-
-#else /* !CONFIG_RT_GROUP_SCHED */
-static int sched_rt_global_constraints(void)
-{
-	unsigned long flags;
-	int i;
-
-	raw_spin_lock_irqsave(&def_rt_bandwidth.rt_runtime_lock, flags);
-	for_each_possible_cpu(i) {
-		struct rt_rq *rt_rq = &cpu_rq(i)->rt;
-
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-		rt_rq->rt_runtime = global_rt_runtime();
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-	}
-	raw_spin_unlock_irqrestore(&def_rt_bandwidth.rt_runtime_lock, flags);
-
-	return 0;
-}
-#endif /* CONFIG_RT_GROUP_SCHED */
-
-static int sched_dl_global_validate(void)
-{
-	u64 runtime = global_rt_runtime();
-	u64 period = global_rt_period();
-	u64 new_bw = to_ratio(period, runtime);
-	struct dl_bw *dl_b;
-	int cpu, ret = 0;
-	unsigned long flags;
-
-	/*
-	 * Here we want to check the bandwidth not being set to some
-	 * value smaller than the currently allocated bandwidth in
-	 * any of the root_domains.
-	 *
-	 * FIXME: Cycling on all the CPUs is overdoing, but simpler than
-	 * cycling on root_domains... Discussion on different/better
-	 * solutions is welcome!
-	 */
-	for_each_possible_cpu(cpu) {
-		rcu_read_lock_sched();
-		dl_b = dl_bw_of(cpu);
-
-		raw_spin_lock_irqsave(&dl_b->lock, flags);
-		if (new_bw < dl_b->total_bw)
-			ret = -EBUSY;
-		raw_spin_unlock_irqrestore(&dl_b->lock, flags);
-
-		rcu_read_unlock_sched();
-
-		if (ret)
-			break;
-	}
-
-	return ret;
-}
-
-void init_dl_rq_bw_ratio(struct dl_rq *dl_rq)
-{
-	if (global_rt_runtime() == RUNTIME_INF) {
-		dl_rq->bw_ratio = 1 << RATIO_SHIFT;
-		dl_rq->extra_bw = 1 << BW_SHIFT;
-	} else {
-		dl_rq->bw_ratio = to_ratio(global_rt_runtime(),
-			  global_rt_period()) >> (BW_SHIFT - RATIO_SHIFT);
-		dl_rq->extra_bw = to_ratio(global_rt_period(),
-						    global_rt_runtime());
-	}
-}
-
-static void sched_dl_do_global(void)
-{
-	u64 new_bw = -1;
-	struct dl_bw *dl_b;
-	int cpu;
-	unsigned long flags;
-
-	def_dl_bandwidth.dl_period = global_rt_period();
-	def_dl_bandwidth.dl_runtime = global_rt_runtime();
-
-	if (global_rt_runtime() != RUNTIME_INF)
-		new_bw = to_ratio(global_rt_period(), global_rt_runtime());
-
-	/*
-	 * FIXME: As above...
-	 */
-	for_each_possible_cpu(cpu) {
-		rcu_read_lock_sched();
-		dl_b = dl_bw_of(cpu);
-
-		raw_spin_lock_irqsave(&dl_b->lock, flags);
-		dl_b->bw = new_bw;
-		raw_spin_unlock_irqrestore(&dl_b->lock, flags);
-
-		rcu_read_unlock_sched();
-		init_dl_rq_bw_ratio(&cpu_rq(cpu)->dl);
-	}
-}
-
-static int sched_rt_global_validate(void)
-{
-	if (sysctl_sched_rt_period <= 0)
-		return -EINVAL;
-
-	if ((sysctl_sched_rt_runtime != RUNTIME_INF) &&
-		(sysctl_sched_rt_runtime > sysctl_sched_rt_period))
-		return -EINVAL;
-
-	return 0;
-}
-
-static void sched_rt_do_global(void)
-{
-	def_rt_bandwidth.rt_runtime = global_rt_runtime();
-	def_rt_bandwidth.rt_period = ns_to_ktime(global_rt_period());
-}
-
-int sched_rt_handler(struct ctl_table *table, int write,
-		void __user *buffer, size_t *lenp,
-		loff_t *ppos)
-{
-	int old_period, old_runtime;
-	static DEFINE_MUTEX(mutex);
-	int ret;
-
-	mutex_lock(&mutex);
-	old_period = sysctl_sched_rt_period;
-	old_runtime = sysctl_sched_rt_runtime;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-
-	if (!ret && write) {
-		ret = sched_rt_global_validate();
-		if (ret)
-			goto undo;
-
-		ret = sched_dl_global_validate();
-		if (ret)
-			goto undo;
-
-		ret = sched_rt_global_constraints();
-		if (ret)
-			goto undo;
-
-		sched_rt_do_global();
-		sched_dl_do_global();
-	}
-	if (0) {
-undo:
-		sysctl_sched_rt_period = old_period;
-		sysctl_sched_rt_runtime = old_runtime;
-	}
-	mutex_unlock(&mutex);
-
-	return ret;
-}
-
-int sched_rr_handler(struct ctl_table *table, int write,
-		void __user *buffer, size_t *lenp,
-		loff_t *ppos)
-{
-	int ret;
-	static DEFINE_MUTEX(mutex);
-
-	mutex_lock(&mutex);
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	/*
-	 * Make sure that internally we keep jiffies.
-	 * Also, writing zero resets the timeslice to default:
-	 */
-	if (!ret && write) {
-		sched_rr_timeslice =
-			sysctl_sched_rr_timeslice <= 0 ? RR_TIMESLICE :
-			msecs_to_jiffies(sysctl_sched_rr_timeslice);
-	}
-	mutex_unlock(&mutex);
-	return ret;
-}
-
-#ifdef CONFIG_CGROUP_SCHED
 
 static inline struct task_group *css_tg(struct cgroup_subsys_state *css)
 {

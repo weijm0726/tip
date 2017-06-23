@@ -218,9 +218,6 @@ static inline int dl_bandwidth_enabled(void)
 	return sysctl_sched_rt_runtime >= 0;
 }
 
-extern struct dl_bw *dl_bw_of(int i);
-extern int dl_bw_cpus(int i);
-
 struct dl_bw {
 	raw_spinlock_t lock;
 	u64 bw, total_bw;
@@ -251,6 +248,20 @@ bool __dl_overflow(struct dl_bw *dl_b, int cpus, u64 old_bw, u64 new_bw)
 
 void dl_change_utilization(struct task_struct *p, u64 new_bw);
 extern void init_dl_bw(struct dl_bw *dl_b);
+extern int sched_dl_global_validate(void);
+extern void sched_dl_do_global(void);
+extern int sched_dl_overflow(struct task_struct *p, int policy,
+			     const struct sched_attr *attr);
+extern void __setparam_dl(struct task_struct *p, const struct sched_attr *attr);
+extern void __getparam_dl(struct task_struct *p, struct sched_attr *attr);
+extern bool __checkparam_dl(const struct sched_attr *attr);
+extern void __dl_clear_params(struct task_struct *p);
+extern bool dl_param_changed(struct task_struct *p, const struct sched_attr *attr);
+extern int dl_task_can_attach(struct task_struct *p,
+			      const struct cpumask *cs_cpus_allowed);
+extern int dl_cpuset_cpumask_can_shrink(const struct cpumask *cur,
+					const struct cpumask *trial);
+extern bool dl_cpu_busy(unsigned int cpu);
 
 #ifdef CONFIG_CGROUP_SCHED
 
@@ -372,6 +383,11 @@ extern int alloc_rt_sched_group(struct task_group *tg, struct task_group *parent
 extern void init_tg_rt_entry(struct task_group *tg, struct rt_rq *rt_rq,
 		struct sched_rt_entity *rt_se, int cpu,
 		struct sched_rt_entity *parent);
+extern int sched_group_set_rt_runtime(struct task_group *tg, long rt_runtime_us);
+extern int sched_group_set_rt_period(struct task_group *tg, u64 rt_period_us);
+extern long sched_group_rt_runtime(struct task_group *tg);
+extern long sched_group_rt_period(struct task_group *tg);
+extern int sched_rt_can_attach(struct task_group *tg, struct task_struct *tsk);
 
 extern struct task_group *sched_create_group(struct task_group *parent);
 extern void sched_online_group(struct task_group *tg,
