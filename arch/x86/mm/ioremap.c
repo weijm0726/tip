@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/mmiotrace.h>
+#include <linux/mem_encrypt.h>
 
 #include <asm/set_memory.h>
 #include <asm/e820/api.h>
@@ -104,12 +105,6 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 		WARN_ON_ONCE(1);
 		return NULL;
 	}
-
-	/*
-	 * Don't remap the low PCI/ISA area, it's always mapped..
-	 */
-	if (is_ISA_range(phys_addr, last_addr))
-		return (__force void __iomem *)phys_to_virt(phys_addr);
 
 	/*
 	 * Don't allow anybody to remap normal RAM that we're using..
