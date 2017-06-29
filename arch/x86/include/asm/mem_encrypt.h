@@ -19,6 +19,9 @@
 
 #include <asm/bootparam.h>
 
+#define AMD_SME_FEATURE_BIT	BIT(0)
+#define AMD_SEV_FEATURE_BIT	BIT(1)
+
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 
 extern unsigned long sme_me_mask;
