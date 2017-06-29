@@ -102,6 +102,9 @@ static void delay_mwaitx(unsigned long __loops)
 
 	start = rdtsc_ordered();
 
+	if (loops == 0)
+		return;
+
 	for (;;) {
 		delay = min_t(u64, MWAITX_MAX_LOOPS, loops);
 

@@ -298,6 +298,12 @@ static int FNAME(walk_addr_generic)(struct guest_walker *walker,
 	gfn_t gfn;
 
 	trace_kvm_mmu_pagetable_walk(addr, access);
+	if (kvm_x86_ops->memory_encryption_enabled &&
+		kvm_x86_ops->memory_encryption_enabled(vcpu)) {
+		pr_err("%s: gva %lx requested guest pagetable walk\n", __func__, addr);
+		dump_stack();
+	}
+
 retry_walk:
 	walker->level = mmu->root_level;
 	pte           = mmu->get_cr3(vcpu);
