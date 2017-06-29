@@ -31,3 +31,12 @@ config CRYPTO_DEV_CCP_CRYPTO
 	  Support for using the cryptographic API with the AMD Cryptographic
 	  Coprocessor. This module supports offload of SHA and AES algorithms.
 	  If you choose 'M' here, this module will be called ccp_crypto.
+
+config CRYPTO_DEV_SP_PSP
+	bool "Platform Security Processor device"
+	default y
+	depends on CRYPTO_DEV_CCP_DD
+	help
+	 Provide the support for AMD Platform Security Processor (PSP) device
+	 which can be used for communicating with Secure Encryption Virtualization
+	 (SEV) firmware.
