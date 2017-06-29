@@ -1240,6 +1240,11 @@ static void svm_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 	mark_dirty(svm->vmcb, VMCB_INTERCEPTS);
 }
 
+static void sev_init_vmcb(struct vcpu_svm *svm)
+{
+	svm->vmcb->control.nested_ctl |= SVM_NESTED_CTL_SEV_ENABLE;
+}
+
 static void avic_init_vmcb(struct vcpu_svm *svm)
 {
 	struct vmcb *vmcb = svm->vmcb;
@@ -1371,6 +1376,9 @@ static void init_vmcb(struct vcpu_svm *svm)
 
 	if (avic)
 		avic_init_vmcb(svm);
+
+	if (sev_guest(svm->vcpu.kvm))
+		sev_init_vmcb(svm);
 
 	mark_all_dirty(svm->vmcb);
 
@@ -5870,6 +5878,34 @@ e_free:
 	return ret;
 }
 
+static int sev_launch_finish(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct sev_data_launch_finish *data;
+	struct kvm_vcpu *vcpu;
+	int i, ret;
+
+	if (!sev_guest(kvm))
+		return -EINVAL;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	/* launch finish */
+	data->handle = sev_get_handle(kvm);
+	ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_FINISH, data, &argp->error);
+	if (ret)
+		goto e_free;
+
+	 /* Iterate through each vcpus and enable memory encryption feature */
+	kvm_for_each_vcpu(i, vcpu, kvm)
+		sev_init_vmcb(to_svm(vcpu));
+
+e_free:
+	kfree(data);
+	return ret;
+}
+
 static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 {
 	struct kvm_sev_cmd sev_cmd;
@@ -5887,6 +5923,10 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_LAUNCH_UPDATE_DATA: {
 		r = sev_launch_update_data(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_LAUNCH_FINISH: {
+		r = sev_launch_finish(kvm, &sev_cmd);
 		break;
 	}
 	default:
