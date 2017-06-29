@@ -212,6 +212,9 @@ struct vcpu_svm {
 	 */
 	struct list_head ir_list;
 	spinlock_t ir_list_lock;
+
+	/* which host cpu was used for running this vcpu */
+	unsigned int last_cpuid;
 };
 
 /*
@@ -565,6 +568,8 @@ struct svm_cpu_data {
 	struct kvm_ldttss_desc *tss_desc;
 
 	struct page *save_area;
+
+	struct vmcb **sev_vmcbs;  /* index = sev_asid, value = vmcb pointer */
 };
 
 static DEFINE_PER_CPU(struct svm_cpu_data *, svm_data);
@@ -876,6 +881,7 @@ static void svm_cpu_uninit(int cpu)
 		return;
 
 	per_cpu(svm_data, raw_smp_processor_id()) = NULL;
+	kfree(sd->sev_vmcbs);
 	__free_page(sd->save_area);
 	kfree(sd);
 }
@@ -893,6 +899,14 @@ static int svm_cpu_init(int cpu)
 	r = -ENOMEM;
 	if (!sd->save_area)
 		goto err_1;
+
+	if (svm_sev_enabled()) {
+		sd->sev_vmcbs = kmalloc((max_sev_asid + 1) * sizeof(void *),
+					GFP_KERNEL);
+		r = -ENOMEM;
+		if (!sd->sev_vmcbs)
+			goto err_1;
+	}
 
 	per_cpu(svm_data, cpu) = sd;
 
@@ -4366,11 +4380,39 @@ static void reload_tss(struct kvm_vcpu *vcpu)
 	load_TR_desc();
 }
 
+static void pre_sev_run(struct vcpu_svm *svm)
+{
+	int cpu = raw_smp_processor_id();
+	int asid = sev_get_asid(svm->vcpu.kvm);
+	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
+
+	/* Assign the asid allocated for this SEV guest */
+	svm->vmcb->control.asid = asid;
+
+	/*
+	 * Flush guest TLB:
+	 * when different VMCB for the same ASID is to be run on the same host
+	 * CPU or this VMCB was executed on different host cpu in previous
+	 * VMRUNs.
+	 */
+	if (sd->sev_vmcbs[asid] == svm->vmcb &&
+		svm->last_cpuid == cpu)
+		return;
+
+	svm->last_cpuid = cpu;
+	sd->sev_vmcbs[asid] = svm->vmcb;
+	svm->vmcb->control.tlb_ctl = TLB_CONTROL_FLUSH_ASID;
+	mark_dirty(svm->vmcb, VMCB_ASID);
+}
+
 static void pre_svm_run(struct vcpu_svm *svm)
 {
 	int cpu = raw_smp_processor_id();
 
 	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
+
+	if (sev_guest(svm->vcpu.kvm))
+		return pre_sev_run(svm);
 
 	/* FIXME: handle wraparound of asid_generation */
 	if (svm->asid_generation != sd->asid_generation)
@@ -5423,10 +5465,16 @@ static int sev_asid_new(void)
 
 static void sev_asid_free(int asid)
 {
-	int pos;
+	struct svm_cpu_data *sd;
+	int pos, cpu;
 
 	pos = asid - 1;
 	clear_bit(pos, sev_asid_bitmap);
+
+	for_each_possible_cpu(cpu) {
+		sd = per_cpu(svm_data, cpu);
+		sd->sev_vmcbs[pos] = NULL;
+	}
 }
 
 static int sev_issue_cmd(struct kvm *kvm, int id, void *data, int *error)
