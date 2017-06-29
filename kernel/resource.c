@@ -468,6 +468,23 @@ int walk_system_ram_res(u64 start, u64 end, void *arg,
 				     arg, func);
 }
 
+/*
+ * This function calls the @func callback against all memory ranges, which
+ * are ranges marked as IORESOURCE_MEM and IORESOUCE_BUSY.
+ */
+int walk_mem_res(u64 start, u64 end, void *arg,
+		 int (*func)(struct resource *, void *))
+{
+	struct resource res;
+
+	res.start = start;
+	res.end = end;
+	res.flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+
+	return __walk_iomem_res_desc(&res, IORES_DESC_NONE, true,
+				     arg, func);
+}
+
 #if !defined(CONFIG_ARCH_HAS_WALK_MEMORY)
 
 /*

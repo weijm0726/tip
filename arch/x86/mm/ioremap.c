@@ -69,6 +69,26 @@ static int __ioremap_check_ram(unsigned long start_pfn, unsigned long nr_pages,
 	return 0;
 }
 
+static int __ioremap_res_desc_other(struct resource *res, void *arg)
+{
+	return (res->desc != IORES_DESC_NONE);
+}
+
+/*
+ * This function returns true if the target memory is marked as
+ * IORESOURCE_MEM and IORESOURCE_BUSY and described as other than
+ * IORES_DESC_NONE (e.g. IORES_DESC_ACPI_TABLES).
+ */
+static bool __ioremap_check_if_mem(resource_size_t addr, unsigned long size)
+{
+	u64 start, end;
+
+	start = (u64)addr;
+	end = start + size - 1;
+
+	return (walk_mem_res(start, end, NULL, __ioremap_res_desc_other) == 1);
+}
+
 /*
  * Remap an arbitrary physical address space into the kernel virtual
  * address space. It transparently creates kernel huge I/O mapping when
@@ -146,7 +166,15 @@ static void __iomem *__ioremap_caller(resource_size_t phys_addr,
 		pcm = new_pcm;
 	}
 
+	/*
+	 * If the page being mapped is in memory and SEV is active then
+	 * make sure the memory encryption attribute is enabled in the
+	 * resulting mapping.
+	 */
 	prot = PAGE_KERNEL_IO;
+	if (sev_active() && __ioremap_check_if_mem(phys_addr, size))
+		prot = pgprot_encrypted(prot);
+
 	switch (pcm) {
 	case _PAGE_CACHE_MODE_UC:
 	default:
