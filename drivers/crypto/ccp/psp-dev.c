@@ -97,6 +97,7 @@ irqreturn_t psp_irq_handler(int irq, void *data)
 static int psp_init(struct psp_device *psp)
 {
 	psp_add_device(psp);
+	sev_dev_init(psp);
 
 	return 0;
 }
@@ -166,17 +167,20 @@ void psp_dev_destroy(struct sp_device *sp)
 	struct psp_device *psp = sp->psp_data;
 
 	sp_free_psp_irq(sp, psp);
+	sev_dev_destroy(psp);
 
 	psp_del_device(psp);
 }
 
 int psp_dev_resume(struct sp_device *sp)
 {
+	sev_dev_resume(sp->psp_data);
 	return 0;
 }
 
 int psp_dev_suspend(struct sp_device *sp, pm_message_t state)
 {
+	sev_dev_suspend(sp->psp_data, state);
 	return 0;
 }
 
