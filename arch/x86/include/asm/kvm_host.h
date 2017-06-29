@@ -678,6 +678,7 @@ struct kvm_vcpu_arch {
 
 	/* GPA available (AMD only) */
 	bool gpa_available;
+	gpa_t gpa_val;
 };
 
 struct kvm_lpage_info {

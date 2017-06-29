@@ -2263,6 +2263,10 @@ static int pf_interception(struct vcpu_svm *svm)
 	u64 fault_address = __sme_clr(svm->vmcb->control.exit_info_2);
 	u64 error_code;
 	int r = 1;
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+
+	/* On #NPF, exit_info_2 contains a valid GPA */
+	vcpu->arch.gpa_val = fault_address;
 
 	switch (svm->apf_reason) {
 	default:
