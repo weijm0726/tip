@@ -1243,6 +1243,7 @@ static void svm_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 static void sev_init_vmcb(struct vcpu_svm *svm)
 {
 	svm->vmcb->control.nested_ctl |= SVM_NESTED_CTL_SEV_ENABLE;
+	clr_exception_intercept(svm, UD_VECTOR);
 }
 
 static void avic_init_vmcb(struct vcpu_svm *svm)
