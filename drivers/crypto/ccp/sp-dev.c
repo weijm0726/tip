@@ -240,13 +240,13 @@ static int __init sp_mod_init(void)
 #ifdef CONFIG_X86
 	int ret;
 
-	ret = ccp_pci_init();
+	ret = sp_pci_init();
 	if (ret)
 		return ret;
 
 	/* Don't leave the driver loaded if init failed */
 	if (ccp_present() != 0) {
-		ccp_pci_exit();
+		sp_pci_exit();
 		return -ENODEV;
 	}
 
@@ -256,13 +256,13 @@ static int __init sp_mod_init(void)
 #ifdef CONFIG_ARM64
 	int ret;
 
-	ret = ccp_platform_init();
+	ret = sp_platform_init();
 	if (ret)
 		return ret;
 
 	/* Don't leave the driver loaded if init failed */
 	if (ccp_present() != 0) {
-		ccp_platform_exit();
+		sp_platform_exit();
 		return -ENODEV;
 	}
 
@@ -275,11 +275,11 @@ static int __init sp_mod_init(void)
 static void __exit sp_mod_exit(void)
 {
 #ifdef CONFIG_X86
-	ccp_pci_exit();
+	sp_pci_exit();
 #endif
 
 #ifdef CONFIG_ARM64
-	ccp_platform_exit();
+	sp_platform_exit();
 #endif
 }
 
