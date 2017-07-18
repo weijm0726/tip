@@ -329,6 +329,8 @@ static unsigned int max_sev_asid;
 static unsigned long *sev_asid_bitmap;
 static int sev_asid_new(void);
 static void sev_asid_free(int asid);
+static void sev_deactivate_handle(struct kvm *kvm, int *error);
+static void sev_decommission_handle(struct kvm *kvm, int *error);
 
 static bool svm_sev_enabled(void)
 {
@@ -1564,6 +1566,12 @@ static void sev_vm_destroy(struct kvm *kvm)
 
 	if (!sev_guest(kvm))
 		return;
+
+	/* release the firmware resources for this guest */
+	if (sev_get_handle(kvm)) {
+		sev_deactivate_handle(kvm, &error);
+		sev_decommission_handle(kvm, &error);
+	}
 
 	sev_asid_free(sev_get_asid(kvm));
 	sev_firmware_uninit();
@@ -5635,6 +5643,159 @@ e_err:
 	return ret;
 }
 
+static int sev_issue_cmd(struct kvm *kvm, int id, void *data, int *error)
+{
+	int fd = sev_get_fd(kvm);
+	struct fd f;
+	int ret;
+
+	f = fdget(fd);
+	if (!f.file)
+		return -EBADF;
+
+	ret = sev_issue_cmd_external_user(f.file, id, data, error);
+	fdput(f);
+
+	return ret;
+}
+
+static void sev_decommission_handle(struct kvm *kvm, int *error)
+{
+	struct sev_data_decommission *data;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return;
+
+	data->handle = sev_get_handle(kvm);
+	sev_guest_decommission(data, error);
+	kfree(data);
+}
+
+static void sev_deactivate_handle(struct kvm *kvm, int *error)
+{
+	struct sev_data_deactivate *data;
+	int ret;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return;
+
+	data->handle = sev_get_handle(kvm);
+	ret = sev_guest_deactivate(data, error);
+	if (ret)
+		goto e_free;
+
+	wbinvd_on_all_cpus();
+
+	sev_guest_df_flush(error);
+e_free:
+	kfree(data);
+}
+
+static int sev_activate_asid(struct kvm *kvm, unsigned int handle, int *error)
+{
+	struct sev_data_activate *data;
+	int asid = sev_get_asid(kvm);
+	int ret;
+
+	wbinvd_on_all_cpus();
+
+	ret = sev_guest_df_flush(error);
+	if (ret)
+		return ret;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	data->handle = handle;
+	data->asid   = asid;
+	ret = sev_guest_activate(data, error);
+	if (ret)
+		goto e_err;
+
+	sev_set_handle(kvm, handle);
+e_err:
+	kfree(data);
+	return ret;
+}
+
+static int sev_launch_start(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct sev_data_launch_start *start = NULL;
+	struct kvm_sev_launch_start params;
+	void *dh_cert_addr = NULL;
+	void *session_addr = NULL;
+	int *error = &argp->error;
+	int ret;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	ret = -EFAULT;
+	if (copy_from_user(&params, (void *)argp->data,
+				sizeof(struct kvm_sev_launch_start)))
+		goto e_free;
+
+	ret = -ENOMEM;
+	start = kzalloc(sizeof(*start), GFP_KERNEL);
+	if (!start)
+		goto e_free;
+
+	/* Bit 15:6 reserved, must be 0 */
+	start->policy = params.policy & ~0xffc0;
+
+	if (params.dh_cert_length && params.dh_cert_address) {
+		ret = -ENOMEM;
+		dh_cert_addr = kmalloc(params.dh_cert_length, GFP_KERNEL);
+		if (!dh_cert_addr)
+			goto e_free;
+
+		ret = -EFAULT;
+		if (copy_from_user(dh_cert_addr, (void *)params.dh_cert_address,
+				params.dh_cert_length))
+			goto e_free;
+
+		start->dh_cert_address = __sme_set(__pa(dh_cert_addr));
+		start->dh_cert_length = params.dh_cert_length;
+	}
+
+	if (params.session_length && params.session_address) {
+		ret = -ENOMEM;
+		session_addr = kmalloc(params.session_length, GFP_KERNEL);
+		if (!session_addr)
+			goto e_free;
+
+		ret = -EFAULT;
+		if (copy_from_user(session_addr, (void *)params.session_address,
+				params.session_length))
+			goto e_free;
+
+		start->session_address = __sme_set(__pa(session_addr));
+		start->session_length = params.session_length;
+	}
+
+	start->handle = params.handle;
+	ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_START, start, error);
+	if (ret)
+		goto e_free;
+
+	ret = sev_activate_asid(kvm, start->handle, error);
+	if (ret)
+		goto e_free;
+
+	params.handle = start->handle;
+	if (copy_to_user((void *) argp->data, &params,
+				sizeof(struct kvm_sev_launch_start)))
+		ret = -EFAULT;
+e_free:
+	kfree(dh_cert_addr);
+	kfree(session_addr);
+	kfree(start);
+	return ret;
+}
+
 static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 {
 	struct kvm_sev_cmd sev_cmd;
@@ -5648,6 +5809,10 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	switch (sev_cmd.id) {
 	case KVM_SEV_INIT: {
 		r = sev_guest_init(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_LAUNCH_START: {
+		r = sev_launch_start(kvm, &sev_cmd);
 		break;
 	}
 	default:
