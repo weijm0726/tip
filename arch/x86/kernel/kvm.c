@@ -75,8 +75,8 @@ static int parse_no_kvmclock_vsyscall(char *arg)
 
 early_param("no-kvmclock-vsyscall", parse_no_kvmclock_vsyscall);
 
-static DEFINE_PER_CPU(struct kvm_vcpu_pv_apf_data, apf_reason) __aligned(64);
-static DEFINE_PER_CPU(struct kvm_steal_time, steal_time) __aligned(64);
+static DEFINE_PER_CPU_HV_SHARED(struct kvm_vcpu_pv_apf_data, apf_reason) __aligned(64);
+static DEFINE_PER_CPU_HV_SHARED(struct kvm_steal_time, steal_time) __aligned(64);
 static int has_steal_clock = 0;
 
 /*
@@ -303,7 +303,7 @@ static void kvm_register_steal_time(void)
 		cpu, (unsigned long long) slow_virt_to_phys(st));
 }
 
-static DEFINE_PER_CPU(unsigned long, kvm_apic_eoi) = KVM_PV_EOI_DISABLED;
+static DEFINE_PER_CPU_HV_SHARED(unsigned long, kvm_apic_eoi) = KVM_PV_EOI_DISABLED;
 
 static notrace void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 {
@@ -319,10 +319,50 @@ static notrace void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 	apic->native_eoi_write(APIC_EOI, APIC_EOI_ACK);
 }
 
+/* NOTE: function is marked as __ref because it is used by __init functions */
+static int __ref kvm_map_hv_shared_decrypted(void)
+{
+	static int once, ret;
+	int cpu;
+
+	if (once)
+		return ret;
+
+	/*
+	 * Iterate through all possible CPU's and clear the C-bit from
+	 * percpu variables.
+	 */
+	for_each_possible_cpu(cpu) {
+		struct kvm_vcpu_pv_apf_data *apf;
+		unsigned long pa;
+
+		apf = &per_cpu(apf_reason, cpu);
+		pa = slow_virt_to_phys(apf);
+		sme_early_decrypt(pa & PAGE_MASK, PAGE_SIZE);
+		ret = early_set_memory_decrypted(pa, PAGE_SIZE);
+		if (ret)
+			break;
+	}
+
+	once = 1;
+	return ret;
+}
+
 static void kvm_guest_cpu_init(void)
 {
 	if (!kvm_para_available())
 		return;
+
+	/*
+	 * When SEV is active, map the shared percpu as unencrypted so that
+	 * both guest and hypervsior can access the data.
+	 */
+	if (sev_active()) {
+		if (kvm_map_hv_shared_decrypted()) {
+			printk(KERN_ERR "Failed to map percpu as unencrypted\n");
+			return;
+		}
+	}
 
 	if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF) && kvmapf) {
 		u64 pa = slow_virt_to_phys(this_cpu_ptr(&apf_reason));

@@ -783,6 +783,9 @@
 	. = ALIGN(cacheline);						\
 	*(.data..percpu)						\
 	*(.data..percpu..shared_aligned)				\
+	. = ALIGN(PAGE_SIZE);						\
+	*(.data..percpu..hv_shared)					\
+	. = ALIGN(PAGE_SIZE);						\
 	VMLINUX_SYMBOL(__per_cpu_end) = .;
 
 /**

@@ -173,6 +173,18 @@
 	DEFINE_PER_CPU_SECTION(type, name, "..read_mostly")
 
 /*
+ * Declaration/definition used for per-CPU variables that must be shared
+ * between hypervisor and guest OS.
+ */
+#ifdef CONFIG_VIRTUALIZATION
+#define DECLARE_PER_CPU_HV_SHARED(type, name)				\
+	DECLARE_PER_CPU_SECTION(type, name, "..hv_shared")
+
+#define DEFINE_PER_CPU_HV_SHARED(type, name)				\
+	DEFINE_PER_CPU_SECTION(type, name, "..hv_shared")
+#endif
+
+/*
  * Intermodule exports for per-CPU variables.  sparse forgets about
  * address space across EXPORT_SYMBOL(), change EXPORT_SYMBOL() to
  * noop if __CHECKER__.
