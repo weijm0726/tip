@@ -39,6 +39,8 @@
 #include <linux/frame.h>
 #include <linux/psp-sev.h>
 #include <linux/file.h>
+#include <linux/pagemap.h>
+#include <linux/swap.h>
 
 #include <asm/apic.h>
 #include <asm/perf_event.h>
@@ -331,6 +333,7 @@ static int sev_asid_new(void);
 static void sev_asid_free(int asid);
 static void sev_deactivate_handle(struct kvm *kvm, int *error);
 static void sev_decommission_handle(struct kvm *kvm, int *error);
+#define __sme_page_pa(x) __sme_set(page_to_pfn(x) << PAGE_SHIFT)
 
 static bool svm_sev_enabled(void)
 {
@@ -5796,6 +5799,164 @@ e_free:
 	return ret;
 }
 
+static struct page **sev_pin_memory(unsigned long uaddr, unsigned long ulen,
+				    unsigned long *n, int write)
+{
+	unsigned long npages, pinned, size;
+	struct page **pages;
+	int first, last;
+
+	/* Get number of pages */
+	first = (uaddr & PAGE_MASK) >> PAGE_SHIFT;
+	last = ((uaddr + ulen - 1) & PAGE_MASK) >> PAGE_SHIFT;
+	npages = (last - first + 1);
+
+	/* Avoid using vmalloc for smaller buffer */
+	size = npages * sizeof(struct page *);
+	if (size > PAGE_SIZE)
+		pages = vmalloc(size);
+	else
+		pages = kmalloc(size, GFP_KERNEL);
+
+	if (!pages)
+		return NULL;
+
+	/* pin the user virtual address */
+	pinned = get_user_pages_fast(uaddr, npages, write ? FOLL_WRITE : 0,
+					pages);
+	if (pinned != npages) {
+		pr_err("failed to pin %ld pages (got %ld)\n", npages, pinned);
+		goto err;
+	}
+
+	*n = npages;
+	return pages;
+err:
+	if (pinned > 0)
+		release_pages(pages, pinned, 0);
+	kvfree(pages);
+
+	return NULL;
+}
+
+static void sev_unpin_memory(struct page **pages, unsigned long npages)
+{
+	release_pages(pages, npages, 0);
+	kvfree(pages);
+}
+
+static void sev_clflush_pages(struct page *pages[], unsigned long npages)
+{
+	uint8_t *page_virtual;
+	unsigned long i;
+
+	if (npages == 0 || pages == NULL)
+		return;
+
+	for (i = 0; i < npages; i++) {
+		page_virtual = kmap_atomic(pages[i]);
+		clflush_cache_range(page_virtual, PAGE_SIZE);
+		kunmap_atomic(page_virtual);
+	}
+}
+
+static int get_num_contig_pages(int idx, struct page **inpages,
+				unsigned long npages)
+{
+	int i = idx + 1, pages = 1;
+	unsigned long paddr, next_paddr;
+
+	/* find the number of contiguous pages starting from idx */
+	paddr = __sme_page_pa(inpages[idx]);
+	while (i < npages) {
+		next_paddr = __sme_page_pa(inpages[i++]);
+		if ((paddr + PAGE_SIZE) == next_paddr) {
+			pages++;
+			paddr = next_paddr;
+			continue;
+		}
+		break;
+	}
+
+	return pages;
+}
+
+static int sev_launch_update_data(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	unsigned long vaddr, vaddr_end, next_vaddr, npages, size;
+	struct kvm_sev_launch_update_data params;
+	struct sev_data_launch_update_data *data;
+	struct page **inpages;
+	int i, ret, pages;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	if (copy_from_user(&params, (void *)argp->data,
+			sizeof(struct kvm_sev_launch_update_data)))
+		return -EFAULT;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	vaddr = params.address;
+	size = params.length;
+	vaddr_end = vaddr + size;
+
+	/* lock the user memory */
+	inpages = sev_pin_memory(vaddr, size, &npages, 1);
+	if (!inpages) {
+		ret = -ENOMEM;
+		goto e_free;
+	}
+
+	/*
+	 * invalidate the cache to ensure that DRAM has recent content before
+	 * calling the SEV commands.
+	 */
+	sev_clflush_pages(inpages, npages);
+
+	for (i = 0; vaddr < vaddr_end; vaddr = next_vaddr, i += pages) {
+		int offset, len;
+
+		/*
+		 * since user buffer may not be page aligned, calculate the
+		 * offset within the page.
+		 */
+		offset = vaddr & (PAGE_SIZE - 1);
+
+		/*
+		 * calculate the number of pages that can be encrypted in one go
+		 */
+		pages = get_num_contig_pages(i, inpages, npages);
+
+		len = min_t(size_t, ((pages * PAGE_SIZE) - offset), size);
+
+		data->handle = sev_get_handle(kvm);
+		data->length = len;
+		data->address = __sme_page_pa(inpages[i]) + offset;
+		ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_UPDATE_DATA, data,
+				&argp->error);
+		if (ret)
+			goto e_unpin;
+
+		size -= len;
+		next_vaddr = vaddr + len;
+	}
+e_unpin:
+	/* content of memory is updated, mark pages dirty */
+	for (i = 0; i < npages; i++) {
+		set_page_dirty_lock(inpages[i]);
+		mark_page_accessed(inpages[i]);
+	}
+	/* unlock the user pages */
+	sev_unpin_memory(inpages, npages);
+e_free:
+	kfree(data);
+	return ret;
+}
+
 static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 {
 	struct kvm_sev_cmd sev_cmd;
@@ -5813,6 +5974,10 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_LAUNCH_START: {
 		r = sev_launch_start(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_LAUNCH_UPDATE_DATA: {
+		r = sev_launch_update_data(kvm, &sev_cmd);
 		break;
 	}
 	default:
