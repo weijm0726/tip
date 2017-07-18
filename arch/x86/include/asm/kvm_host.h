@@ -747,6 +747,7 @@ struct kvm_sev_info {
 	unsigned int handle;	/* firmware handle */
 	unsigned int asid;	/* asid for this guest */
 	int sev_fd;		/* SEV device fd */
+	struct list_head ram_list; /* list of registered ram */
 };
 
 struct kvm_arch {

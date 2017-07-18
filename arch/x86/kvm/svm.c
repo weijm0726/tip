@@ -333,7 +333,18 @@ static int sev_asid_new(void);
 static void sev_asid_free(int asid);
 static void sev_deactivate_handle(struct kvm *kvm, int *error);
 static void sev_decommission_handle(struct kvm *kvm, int *error);
+static void sev_unpin_memory(struct page **pages, unsigned long npages);
+
 #define __sme_page_pa(x) __sme_set(page_to_pfn(x) << PAGE_SHIFT)
+
+struct kvm_sev_pin_ram {
+	struct list_head list;
+	unsigned long npages;
+	struct page **pages;
+	struct kvm_memory_encrypt_ram userspace;
+};
+
+static void __mem_encrypt_unregister_ram(struct kvm_sev_pin_ram *ram);
 
 static bool svm_sev_enabled(void)
 {
@@ -383,6 +394,11 @@ static inline void sev_set_handle(struct kvm *kvm, unsigned int handle)
 static inline void sev_set_fd(struct kvm *kvm, int fd)
 {
 	to_sev_info(kvm)->sev_fd = fd;
+}
+
+static inline struct list_head *sev_get_ram_list(struct kvm *kvm)
+{
+	return &to_sev_info(kvm)->ram_list;
 }
 
 static inline void mark_all_dirty(struct vmcb *vmcb)
@@ -1566,9 +1582,23 @@ static void sev_firmware_uninit(void)
 static void sev_vm_destroy(struct kvm *kvm)
 {
 	int state, error;
+	struct list_head *pos, *q;
+	struct kvm_sev_pin_ram *ram;
+	struct list_head *head = sev_get_ram_list(kvm);
 
 	if (!sev_guest(kvm))
 		return;
+
+	/*
+	 * if userspace was terminated before unregistering the memory region
+	 * then lets unpin all the registered memory.
+	 */
+	if (!list_empty(head)) {
+		list_for_each_safe(pos, q, head) {
+			ram = list_entry(pos, struct kvm_sev_pin_ram, list);
+			__mem_encrypt_unregister_ram(ram);
+		}
+	}
 
 	/* release the firmware resources for this guest */
 	if (sev_get_handle(kvm)) {
@@ -5640,6 +5670,7 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	sev_set_active(kvm);
 	sev_set_asid(kvm, asid);
 	sev_set_fd(kvm, argp->sev_fd);
+	INIT_LIST_HEAD(sev_get_ram_list(kvm));
 	ret = 0;
 e_err:
 	fdput(f);
@@ -6437,6 +6468,86 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	return r;
 }
 
+static int mem_encrypt_register_ram(struct kvm *kvm,
+				    struct kvm_memory_encrypt_ram *ram)
+{
+	struct list_head *head = sev_get_ram_list(kvm);
+	struct kvm_sev_pin_ram *pin_ram;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	pin_ram = kzalloc(sizeof(*pin_ram), GFP_KERNEL);
+	if (!pin_ram)
+		return -ENOMEM;
+
+	pin_ram->pages = sev_pin_memory(ram->address, ram->size,
+					&pin_ram->npages, 1);
+	if (!pin_ram->pages)
+		goto e_free;
+
+	/*
+	 * Guest may change the memory encryption attribute from C=0 -> C=1
+	 * for this memory range. Lets make sure caches are flushed to ensure
+	 * that guest data gets written into memory with correct C-bit.
+	 */
+	sev_clflush_pages(pin_ram->pages, pin_ram->npages);
+
+	pin_ram->userspace.address = ram->address;
+	pin_ram->userspace.size = ram->size;
+	list_add_tail(&pin_ram->list, head);
+	return 0;
+e_free:
+	kfree(pin_ram);
+	return 1;
+}
+
+static struct kvm_sev_pin_ram *sev_find_pinned_ram(struct kvm *kvm,
+					struct kvm_memory_encrypt_ram *ram)
+{
+	struct list_head *head = sev_get_ram_list(kvm);
+	struct kvm_sev_pin_ram *i;
+
+	list_for_each_entry(i, head, list) {
+		if (i->userspace.address == ram->address &&
+			i->userspace.size == ram->size)
+			return i;
+	}
+
+	return NULL;
+}
+
+static void __mem_encrypt_unregister_ram(struct kvm_sev_pin_ram *ram)
+{
+	/*
+	 * Guest may have changed the memory encryption attribute from
+	 * C=0 -> C=1. Lets make sure caches are flushed to ensure in data
+	 * gets written into memory with correct C-bit.
+	 */
+	sev_clflush_pages(ram->pages, ram->npages);
+
+	sev_unpin_memory(ram->pages, ram->npages);
+	list_del(&ram->list);
+	kfree(ram);
+}
+
+static int mem_encrypt_unregister_ram(struct kvm *kvm,
+				      struct kvm_memory_encrypt_ram *ram)
+{
+	struct kvm_sev_pin_ram *pinned_ram;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	pinned_ram = sev_find_pinned_ram(kvm, ram);
+	if (!pinned_ram)
+		return -EINVAL;
+
+	__mem_encrypt_unregister_ram(pinned_ram);
+
+	return 0;
+}
+
 static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.cpu_has_kvm_support = has_svm,
 	.disabled_by_bios = is_disabled,
@@ -6551,6 +6662,8 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.setup_mce = svm_setup_mce,
 
 	.memory_encryption_op = svm_memory_encryption_op,
+	.memory_encryption_register_ram = mem_encrypt_register_ram,
+	.memory_encryption_unregister_ram = mem_encrypt_unregister_ram,
 };
 
 static int __init svm_init(void)
