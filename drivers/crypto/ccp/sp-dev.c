@@ -244,12 +244,6 @@ static int __init sp_mod_init(void)
 	if (ret)
 		return ret;
 
-	/* Don't leave the driver loaded if init failed */
-	if (ccp_present() != 0) {
-		sp_pci_exit();
-		return -ENODEV;
-	}
-
 	return 0;
 #endif
 
@@ -259,12 +253,6 @@ static int __init sp_mod_init(void)
 	ret = sp_platform_init();
 	if (ret)
 		return ret;
-
-	/* Don't leave the driver loaded if init failed */
-	if (ccp_present() != 0) {
-		sp_platform_exit();
-		return -ENODEV;
-	}
 
 	return 0;
 #endif
