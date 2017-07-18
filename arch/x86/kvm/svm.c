@@ -322,6 +322,51 @@ enum {
 /* Secure Encrypted Virtualization */
 static unsigned int max_sev_asid;
 
+static inline struct kvm_sev_info *to_sev_info(struct kvm *kvm)
+{
+	return &kvm->arch.sev_info;
+}
+
+static inline void sev_set_active(struct kvm *kvm)
+{
+	to_sev_info(kvm)->active = true;
+}
+
+static inline unsigned int sev_get_handle(struct kvm *kvm)
+{
+	return to_sev_info(kvm)->handle;
+}
+
+static inline bool sev_guest(struct kvm *kvm)
+{
+	return to_sev_info(kvm)->active;
+}
+
+static inline int sev_get_asid(struct kvm *kvm)
+{
+	return to_sev_info(kvm)->asid;
+}
+
+static inline int sev_get_fd(struct kvm *kvm)
+{
+	return to_sev_info(kvm)->sev_fd;
+}
+
+static inline void sev_set_asid(struct kvm *kvm, int asid)
+{
+	to_sev_info(kvm)->asid = asid;
+}
+
+static inline void sev_set_handle(struct kvm *kvm, unsigned int handle)
+{
+	to_sev_info(kvm)->handle = handle;
+}
+
+static inline void sev_set_fd(struct kvm *kvm, int fd)
+{
+	to_sev_info(kvm)->sev_fd = fd;
+}
+
 static inline void mark_all_dirty(struct vmcb *vmcb)
 {
 	vmcb->control.clean = 0;
