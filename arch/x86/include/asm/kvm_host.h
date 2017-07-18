@@ -1059,6 +1059,10 @@ struct kvm_x86_ops {
 	void (*setup_mce)(struct kvm_vcpu *vcpu);
 
 	int (*memory_encryption_op)(struct kvm *kvm, void __user *argp);
+	int (*memory_encryption_register_ram)(struct kvm *kvm,
+					struct kvm_memory_encrypt_ram *ram);
+	int (*memory_encryption_unregister_ram)(struct kvm *kvm,
+					struct kvm_memory_encrypt_ram *ram);
 };
 
 struct kvm_arch_async_pf {

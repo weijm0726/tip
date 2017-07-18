@@ -3982,6 +3982,24 @@ static int kvm_vm_ioctl_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	return -ENOTTY;
 }
 
+static int kvm_vm_ioctl_mem_encrypt_register_ram(struct kvm *kvm,
+					struct kvm_memory_encrypt_ram *ram)
+{
+	if (kvm_x86_ops->memory_encryption_register_ram)
+		return kvm_x86_ops->memory_encryption_register_ram(kvm, ram);
+
+	return -ENOTTY;
+}
+
+static int kvm_vm_ioctl_mem_encrypt_unregister_ram(struct kvm *kvm,
+					struct kvm_memory_encrypt_ram *ram)
+{
+	if (kvm_x86_ops->memory_encryption_unregister_ram)
+		return kvm_x86_ops->memory_encryption_unregister_ram(kvm, ram);
+
+	return -ENOTTY;
+}
+
 long kvm_arch_vm_ioctl(struct file *filp,
 		       unsigned int ioctl, unsigned long arg)
 {
@@ -4244,6 +4262,24 @@ long kvm_arch_vm_ioctl(struct file *filp,
 	}
 	case KVM_MEMORY_ENCRYPT_OP: {
 		r = kvm_vm_ioctl_memory_encryption_op(kvm, argp);
+		break;
+	}
+	case KVM_MEMORY_ENCRYPT_REGISTER_RAM: {
+		struct kvm_memory_encrypt_ram ram;
+
+		r = -EFAULT;
+		if (copy_from_user(&ram, argp, sizeof(ram)))
+			goto out;
+		r = kvm_vm_ioctl_mem_encrypt_register_ram(kvm, &ram);
+		break;
+	}
+	case KVM_MEMORY_ENCRYPT_UNREGISTER_RAM: {
+		struct kvm_memory_encrypt_ram ram;
+
+		r = -EFAULT;
+		if (copy_from_user(&ram, argp, sizeof(ram)))
+			goto out;
+		r = kvm_vm_ioctl_mem_encrypt_unregister_ram(kvm, &ram);
 		break;
 	}
 	default:

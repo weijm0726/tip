@@ -1357,6 +1357,15 @@ struct kvm_s390_ucas_mapping {
 #define KVM_S390_SET_CMMA_BITS      _IOW(KVMIO, 0xb9, struct kvm_s390_cmma_log)
 /* Memory Encryption Commands */
 #define KVM_MEMORY_ENCRYPT_OP	  _IOWR(KVMIO, 0xba, unsigned long)
+#define KVM_MEMORY_ENCRYPT_REGISTER_RAM	   _IOR(KVMIO, 0xbb, \
+						struct kvm_memory_encrypt_ram)
+#define KVM_MEMORY_ENCRYPT_UNREGISTER_RAM  _IOR(KVMIO, 0xbc, \
+						struct kvm_memory_encrypt_ram)
+
+struct kvm_memory_encrypt_ram {
+	__u64 address;
+	__u64 size;
+};
 
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
 #define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
