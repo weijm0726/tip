@@ -78,5 +78,32 @@ int psp_free_tee_irq(struct psp_device *psp, void *data);
 struct psp_device *psp_get_master_device(void);
 
 extern const struct psp_vdata psp_entry;
+#ifdef CONFIG_CRYPTO_DEV_PSP_SEV
+
+int sev_dev_init(struct psp_device *psp);
+void sev_dev_destroy(struct psp_device *psp);
+int sev_dev_resume(struct psp_device *psp);
+int sev_dev_suspend(struct psp_device *psp, pm_message_t state);
+
+#else /* !CONFIG_CRYPTO_DEV_PSP_SEV */
+
+static inline int sev_dev_init(struct psp_device *psp)
+{
+	return -ENODEV;
+}
+
+static inline void sev_dev_destroy(struct psp_device *psp) { }
+
+static inline int sev_dev_resume(struct psp_device *psp)
+{
+	return -ENODEV;
+}
+
+static inline int sev_dev_suspend(struct psp_device *psp, pm_message_t state)
+{
+	return -ENODEV;
+}
+
+#endif /* CONFIG_CRYPTO_DEV_PSP_SEV */
 
 #endif /* __PSP_DEV_H */

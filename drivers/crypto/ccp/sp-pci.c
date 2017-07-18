@@ -280,7 +280,7 @@ static const struct sp_dev_vdata dev_vdata[] = {
 #ifdef CONFIG_CRYPTO_DEV_SP_CCP
 		.ccp_vdata = &ccpv5a,
 #endif
-#ifdef CONFIG_CRYPTO_DEV_PSP
+#ifdef CONFIG_CRYPTO_DEV_SP_PSP
 		.psp_vdata = &psp_entry
 #endif
 	},

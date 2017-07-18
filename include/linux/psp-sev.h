@@ -1,0 +1,683 @@
+/*
+ * AMD Secure Encrypted Virtualization (SEV) driver interface
+ *
+ * Copyright (C) 2016-2017 Advanced Micro Devices, Inc.
+ *
+ * Author: Brijesh Singh <brijesh.singh@amd.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+
+#ifndef __PSP_SEV_H__
+#define __PSP_SEV_H__
+
+#ifdef CONFIG_X86
+#include <linux/mem_encrypt.h>
+
+#define __psp_pa(x)	__sme_pa(x)
+#else
+#define __psp_pa(x)	__pa(x)
+#endif
+
+/**
+ * SEV platform state
+ */
+enum sev_state {
+	SEV_STATE_UNINIT		= 0x0,
+	SEV_STATE_INIT			= 0x1,
+	SEV_STATE_WORKING		= 0x2,
+
+	SEV_STATE_MAX
+};
+
+/**
+ * SEV platform and guest management commands
+ */
+enum sev_cmd {
+	/* platform commands */
+	SEV_CMD_INIT			= 0x001,
+	SEV_CMD_SHUTDOWN		= 0x002,
+	SEV_CMD_FACTORY_RESET		= 0x003,
+	SEV_CMD_PLATFORM_STATUS		= 0x004,
+	SEV_CMD_PEK_GEN			= 0x005,
+	SEV_CMD_PEK_CSR			= 0x006,
+	SEV_CMD_PEK_CERT_IMPORT		= 0x007,
+	SEV_CMD_PDH_CERT_EXPORT		= 0x008,
+	SEV_CMD_PDH_GEN			= 0x009,
+	SEV_CMD_DF_FLUSH		= 0x00A,
+
+	/* Guest commands */
+	SEV_CMD_DECOMMISSION		= 0x020,
+	SEV_CMD_ACTIVATE		= 0x021,
+	SEV_CMD_DEACTIVATE		= 0x022,
+	SEV_CMD_GUEST_STATUS		= 0x023,
+
+	/* Guest launch commands */
+	SEV_CMD_LAUNCH_START		= 0x030,
+	SEV_CMD_LAUNCH_UPDATE_DATA	= 0x031,
+	SEV_CMD_LAUNCH_UPDATE_VMSA	= 0x032,
+	SEV_CMD_LAUNCH_MEASURE		= 0x033,
+	SEV_CMD_LAUNCH_UPDATE_SECRET	= 0x034,
+	SEV_CMD_LAUNCH_FINISH		= 0x035,
+
+	/* Guest migration commands (outgoing) */
+	SEV_CMD_SEND_START		= 0x040,
+	SEV_CMD_SEND_UPDATE_DATA	= 0x041,
+	SEV_CMD_SEND_UPDATE_VMSA	= 0x042,
+	SEV_CMD_SEND_FINISH		= 0x043,
+
+	/* Guest migration commands (incoming) */
+	SEV_CMD_RECEIVE_START		= 0x050,
+	SEV_CMD_RECEIVE_UPDATE_DATA	= 0x051,
+	SEV_CMD_RECEIVE_UPDATE_VMSA	= 0x052,
+	SEV_CMD_RECEIVE_FINISH		= 0x053,
+
+	/* Guest debug commands */
+	SEV_CMD_DBG_DECRYPT		= 0x060,
+	SEV_CMD_DBG_ENCRYPT		= 0x061,
+
+	SEV_CMD_MAX,
+};
+
+/**
+ * status code returned by the commands
+ */
+enum psp_ret_code {
+	SEV_RET_SUCCESS = 0,
+	SEV_RET_INVALID_PLATFORM_STATE,
+	SEV_RET_INVALID_GUEST_STATE,
+	SEV_RET_INAVLID_CONFIG,
+	SEV_RET_INVALID_LENGTH,
+	SEV_RET_ALREADY_OWNED,
+	SEV_RET_INVALID_CERTIFICATE,
+	SEV_RET_POLICY_FAILURE,
+	SEV_RET_INACTIVE,
+	SEV_RET_INVALID_ADDRESS,
+	SEV_RET_BAD_SIGNATURE,
+	SEV_RET_BAD_MEASUREMENT,
+	SEV_RET_ASID_OWNED,
+	SEV_RET_INVALID_ASID,
+	SEV_RET_WBINVD_REQUIRED,
+	SEV_RET_DFFLUSH_REQUIRED,
+	SEV_RET_INVALID_GUEST,
+	SEV_RET_INVALID_COMMAND,
+	SEV_RET_ACTIVE,
+	SEV_RET_HWSEV_RET_PLATFORM,
+	SEV_RET_HWSEV_RET_UNSAFE,
+	SEV_RET_UNSUPPORTED,
+	SEV_RET_MAX,
+};
+
+/**
+ * struct sev_data_init - INIT command parameters
+ *
+ * @flags: processing flags
+ * @tmr_address: system physical address used for SEV-ES
+ * @tmr_length: length of tmr_address
+ */
+struct sev_data_init {
+	__u32 flags;				/* In */
+	__u32 reserved;				/* In */
+	__u64 tmr_address;			/* In */
+	__u32 tmr_length;			/* In */
+};
+
+/**
+ * struct sev_data_status - PLATFORM_STATUS command parameters
+ *
+ * @major: major API version
+ * @minor: minor API version
+ * @state: platform state
+ * @owner: self-owned or externally owned
+ * @config: platform config flags
+ * @guest_count: number of active guests
+ */
+struct sev_data_status {
+	__u8 api_major;				/* Out */
+	__u8 api_minor;				/* Out */
+	__u8 state;				/* Out */
+	__u8 owner;				/* Out */
+	__u32 config;				/* Out */
+	__u32 guest_count;			/* Out */
+};
+
+/**
+ * struct sev_data_pek_csr - PEK_CSR command parameters
+ *
+ * @address: PEK certificate chain
+ * @length: length of certificate
+ */
+struct sev_data_pek_csr {
+	__u64 address;					/* In */
+	__u32 length;					/* In/Out */
+};
+
+/**
+ * struct sev_data_cert_import - PEK_CERT_IMPORT command parameters
+ *
+ * @pek_address: PEK certificate chain
+ * @pek_length: length of PEK certificate
+ * @oca_address: OCA certificate chain
+ * @oca_length: length of OCA certificate
+ */
+struct sev_data_pek_cert_import {
+	__u64 pek_cert_address;				/* In */
+	__u32 pek_cert_length;				/* In */
+	__u32 reserved;					/* In */
+	__u64 oca_cert_address;				/* In */
+	__u32 oca_cert_length;				/* In */
+};
+
+/**
+ * struct sev_data_pdh_cert_export - PDH_CERT_EXPORT command parameters
+ *
+ * @pdh_address: PDH certificate address
+ * @pdh_length: length of PDH certificate
+ * @cert_chain_address: PDH certificate chain
+ * @cert_chain_length: length of PDH certificate chain
+ */
+struct sev_data_pdh_cert_export {
+	__u64 pdh_cert_address;				/* In */
+	__u32 pdh_cert_length;				/* In/Out */
+	__u32 reserved;					/* In */
+	__u64 cert_chain_address;			/* In */
+	__u32 cert_chain_length;			/* In/Out */
+};
+
+/**
+ * struct sev_data_decommission - DECOMMISSION command parameters
+ *
+ * @handle: handle of the VM to decommission
+ */
+struct sev_data_decommission {
+	u32 handle;				/* In */
+};
+
+/**
+ * struct sev_data_activate - ACTIVATE command parameters
+ *
+ * @handle: handle of the VM to activate
+ * @asid: asid assigned to the VM
+ */
+struct sev_data_activate {
+	u32 handle;				/* In */
+	u32 asid;				/* In */
+};
+
+/**
+ * struct sev_data_deactivate - DEACTIVATE command parameters
+ *
+ * @handle: handle of the VM to deactivate
+ */
+struct sev_data_deactivate {
+	u32 handle;				/* In */
+};
+
+/**
+ * struct sev_data_guest_status - SEV GUEST_STATUS command parameters
+ *
+ * @handle: handle of the VM to retrieve status
+ * @policy: policy information for the VM
+ * @asid: current ASID of the VM
+ * @state: current state of the VM
+ */
+struct sev_data_guest_status {
+	u32 handle;				/* In */
+	u32 policy;				/* Out */
+	u32 asid;				/* Out */
+	u8 state;				/* Out */
+};
+
+/**
+ * struct sev_data_launch_start - LAUNCH_START command parameters
+ *
+ * @handle: handle assigned to the VM
+ * @policy: guest launch policy
+ * @dh_cert_address: physical address of DH certificate blob
+ * @dh_cert_length: length of DH certificate blob
+ * @session_address: physical address of session parameters
+ * @session_len: length of session parameters
+ */
+struct sev_data_launch_start {
+	u32 handle;				/* In/Out */
+	u32 policy;				/* In */
+	u64 dh_cert_address;			/* In */
+	u32 dh_cert_length;			/* In */
+	u32 reserved;				/* In */
+	u64 session_address;			/* In */
+	u32 session_length;			/* In */
+};
+
+/**
+ * struct sev_data_launch_update_data - LAUNCH_UPDATE_DATA command parameter
+ *
+ * @handle: handle of the VM to update
+ * @length: length of memory to be encrypted
+ * @address: physical address of memory region to encrypt
+ */
+struct sev_data_launch_update_data {
+	u32 handle;				/* In */
+	u32 reserved;
+	u64 address;				/* In */
+	u32 length;				/* In */
+};
+
+/**
+ * struct sev_data_launch_update_vmsa - LAUNCH_UPDATE_VMSA command
+ *
+ * @handle: handle of the VM
+ * @address: physical address of memory region to encrypt
+ * @length: length of memory region to encrypt
+ */
+struct sev_data_launch_update_vmsa {
+	u32 handle;				/* In */
+	u32 reserved;
+	u64 address;				/* In */
+	u32 length;				/* In */
+};
+
+/**
+ * struct sev_data_launch_measure - LAUNCH_MEASURE command parameters
+ *
+ * @handle: handle of the VM to process
+ * @address: physical address containing the measurement blob
+ * @length: length of measurement blob
+ */
+struct sev_data_launch_measure {
+	u32 handle;				/* In */
+	u32 reserved;
+	u64 address;				/* In */
+	u32 length;				/* In/Out */
+};
+
+/**
+ * struct sev_data_launch_secret - LAUNCH_SECRET command parameters
+ *
+ * @handle: handle of the VM to process
+ * @hdr_address: physical address containing the packet header
+ * @hdr_length: length of packet header
+ * @guest_address: system physical address of guest memory region
+ * @guest_length: length of guest_paddr
+ * @trans_address: physical address of transport memory buffer
+ * @trans_length: length of transport memory buffer
+ */
+struct sev_data_launch_secret {
+	u32 handle;				/* In */
+	u32 reserved1;
+	u64 hdr_address;			/* In */
+	u32 hdr_length;				/* In */
+	u32 reserved2;
+	u64 guest_address;			/* In */
+	u32 guest_length;			/* In */
+	u32 reserved3;
+	u64 trans_address;			/* In */
+	u32 trans_length;			/* In */
+};
+
+/**
+ * struct sev_data_launch_finish - LAUNCH_FINISH command parameters
+ *
+ * @handle: handle of the VM to process
+ */
+struct sev_data_launch_finish {
+	u32 handle;				/* In */
+};
+
+/**
+ * struct sev_data_send_start - SEND_START command parameters
+ *
+ * @handle: handle of the VM to process
+ * @policy: policy information for the VM
+ * @pdh_cert_address: physical address containing PDH certificate
+ * @pdh_cert_length: length of PDH certificate
+ * @plat_certs_address: physical address containing platform certificate
+ * @plat_certs_length: length of platform certificate
+ * @amd_certs_address: physical address containing AMD certificate
+ * @amd_certs_length: length of AMD certificate
+ * @session_address: physical address containing Session data
+ * @session_length: length of session data
+ */
+struct sev_data_send_start {
+	u32 handle;				/* In */
+	u32 policy;				/* Out */
+	u64 pdh_cert_address;			/* In */
+	u32 pdh_cert_length;			/* In */
+	u32 reserved1;
+	u64 plat_cert_address;			/* In */
+	u32 plat_cert_length;			/* In */
+	u32 reserved2;
+	u64 amd_cert_address;			/* In */
+	u32 amd_cert_length;			/* In */
+	u32 reserved3;
+	u64 session_address;			/* In */
+	u32 session_length;			/* In/Out */
+};
+
+/**
+ * struct sev_data_send_update - SEND_UPDATE_DATA command
+ *
+ * @handle: handle of the VM to process
+ * @hdr_address: physical address containing packet header
+ * @hdr_length: length of packet header
+ * @guest_address: physical address of guest memory region to send
+ * @guest_length: length of guest memory region to send
+ * @trans_address: physical address of host memory region
+ * @trans_length: length of host memory region
+ */
+struct sev_data_send_update_data {
+	u32 handle;				/* In */
+	u32 reserved1;
+	u64 hdr_address;			/* In */
+	u32 hdr_length;				/* In/Out */
+	u32 reserved2;
+	u64 guest_address;			/* In */
+	u32 guest_length;			/* In */
+	u32 reserved3;
+	u64 trans_address;			/* In */
+	u32 trans_length;			/* In */
+};
+
+/**
+ * struct sev_data_send_update - SEND_UPDATE_VMSA command
+ *
+ * @handle: handle of the VM to process
+ * @hdr_address: physical address containing packet header
+ * @hdr_length: length of packet header
+ * @guest_address: physical address of guest memory region to send
+ * @guest_length: length of guest memory region to send
+ * @trans_address: physical address of host memory region
+ * @trans_length: length of host memory region
+ */
+struct sev_data_send_update_vmsa {
+	u32 handle;				/* In */
+	u64 hdr_address;			/* In */
+	u32 hdr_length;				/* In/Out */
+	u32 reserved2;
+	u64 guest_address;			/* In */
+	u32 guest_length;			/* In */
+	u32 reserved3;
+	u64 trans_address;			/* In */
+	u32 trans_length;			/* In */
+};
+
+/**
+ * struct sev_data_send_finish - SEND_FINISH command parameters
+ *
+ * @handle: handle of the VM to process
+ */
+struct sev_data_send_finish {
+	u32 handle;				/* In */
+};
+
+/**
+ * struct sev_data_receive_start - RECEIVE_START command parameters
+ *
+ * @handle: handle of the VM to perform receive operation
+ * @pdh_cert_address: system physical address containing PDH certificate blob
+ * @pdh_cert_length: length of PDH certificate blob
+ * @session_address: system physical address containing session blob
+ * @session_length: length of session blob
+ */
+struct sev_data_receive_start {
+	u32 handle;				/* In/Out */
+	u32 policy;				/* In */
+	u64 pdh_cert_address;			/* In */
+	u32 pdh_cert_length;			/* In */
+	u32 reserved1;
+	u64 session_address;			/* In */
+	u32 session_length;			/* In */
+};
+
+/**
+ * struct sev_data_receive_update_data - RECEIVE_UPDATE_DATA command parameters
+ *
+ * @handle: handle of the VM to update
+ * @hdr_address: physical address containing packet header blob
+ * @hdr_length: length of packet header
+ * @guest_address: system physical address of guest memory region
+ * @guest_length: length of guest memory region
+ * @trans_address: system physical address of transport buffer
+ * @trans_length: length of transport buffer
+ */
+struct sev_data_receive_update_data {
+	u32 handle;				/* In */
+	u32 reserved1;
+	u64 hdr_address;			/* In */
+	u32 hdr_length;				/* In */
+	u32 reserved2;
+	u64 guest_address;			/* In */
+	u32 guest_length;			/* In */
+	u32 reserved3;
+	u64 trans_address;			/* In */
+	u32 trans_length;			/* In */
+};
+
+/**
+ * struct sev_data_receive_update_vmsa - RECEIVE_UPDATE_VMSA command parameters
+ *
+ * @handle: handle of the VM to update
+ * @hdr_address: physical address containing packet header blob
+ * @hdr_length: length of packet header
+ * @guest_address: system physical address of guest memory region
+ * @guest_length: length of guest memory region
+ * @trans_address: system physical address of transport buffer
+ * @trans_length: length of transport buffer
+ */
+struct sev_data_receive_update_vmsa {
+	u32 handle;				/* In */
+	u32 reserved1;
+	u64 hdr_address;			/* In */
+	u32 hdr_length;				/* In */
+	u32 reserved2;
+	u64 guest_address;			/* In */
+	u32 guest_length;			/* In */
+	u32 reserved3;
+	u64 trans_address;			/* In */
+	u32 trans_length;			/* In */
+};
+
+/**
+ * struct sev_data_receive_finish - RECEIVE_FINISH command parameters
+ *
+ * @handle: handle of the VM to finish
+ */
+struct sev_data_receive_finish {
+	u32 handle;				/* In */
+};
+
+/**
+ * struct sev_data_dbg - DBG_ENCRYPT/DBG_DECRYPT command parameters
+ *
+ * @handle: handle of the VM to perform debug operation
+ * @src_addr: source address of data to operate on
+ * @dst_addr: destination address of data to operate on
+ * @length: length of data to operate on
+ */
+struct sev_data_dbg {
+	u32 handle;				/* In */
+	u32 reserved;
+	u64 src_addr;				/* In */
+	u64 dst_addr;				/* In */
+	u32 length;				/* In */
+};
+
+#if defined(CONFIG_CRYPTO_DEV_PSP_SEV)
+
+/**
+ * sev_platform_init - perform SEV INIT command
+ *
+ * @init: sev_data_init structure to be processed
+ * @error: SEV command return code
+ *
+ * Returns:
+ * 0 if the SEV successfully processed the command
+ * -%ENODEV    if the SEV device is not available
+ * -%ENOTSUPP  if the SEV does not support SEV
+ * -%ETIMEDOUT if the SEV command timed out
+ * -%EIO       if the SEV returned a non-zero return code
+ */
+int sev_platform_init(struct sev_data_init *init, int *error);
+
+/**
+ * sev_platform_shutdown - perform SEV SHUTDOWN command
+ *
+ * @error: SEV command return code
+ *
+ * Returns:
+ * 0 if the SEV successfully processed the command
+ * -%ENODEV    if the SEV device is not available
+ * -%ENOTSUPP  if the SEV does not support SEV
+ * -%ETIMEDOUT if the SEV command timed out
+ * -%EIO       if the SEV returned a non-zero return code
+ */
+int sev_platform_shutdown(int *error);
+
+/**
+ * sev_platform_status - perform SEV PLATFORM_STATUS command
+ *
+ * @init: sev_data_status structure to be processed
+ * @error: SEV command return code
+ *
+ * Returns:
+ * 0 if the SEV successfully processed the command
+ * -%ENODEV    if the SEV device is not available
+ * -%ENOTSUPP  if the SEV does not support SEV
+ * -%ETIMEDOUT if the SEV command timed out
+ * -%EIO       if the SEV returned a non-zero return code
+ */
+int sev_platform_status(struct sev_data_status *status, int *error);
+
+/**
+ * sev_issue_cmd_external_user - issue SEV command by other driver
+ *
+ * The function can be used by other drivers to issue a SEV command on
+ * behalf by userspace. The caller must pass a valid SEV file descriptor
+ * so that we know that caller has access to SEV device.
+ *
+ * @filep - SEV device file pointer
+ * @cmd - command to issue
+ * @data - command buffer
+ * @error: SEV command return code
+ *
+ * Returns:
+ * 0 if the SEV successfully processed the command
+ * -%ENODEV    if the SEV device is not available
+ * -%ENOTSUPP  if the SEV does not support SEV
+ * -%ETIMEDOUT if the SEV command timed out
+ * -%EIO       if the SEV returned a non-zero return code
+ * -%EINVAL    if the SEV file descriptor is not valid
+ */
+int sev_issue_cmd_external_user(struct file *filep, unsigned int id,
+				void *data, int *error);
+
+/**
+ * sev_guest_deactivate - perform SEV DEACTIVATE command
+ *
+ * @deactivate: sev_data_deactivate structure to be processed
+ * @sev_ret: sev command return code
+ *
+ * Returns:
+ * 0 if the sev successfully processed the command
+ * -%ENODEV    if the sev device is not available
+ * -%ENOTSUPP  if the sev does not support SEV
+ * -%ETIMEDOUT if the sev command timed out
+ * -%EIO       if the sev returned a non-zero return code
+ */
+int sev_guest_deactivate(struct sev_data_deactivate *data, int *error);
+
+/**
+ * sev_guest_activate - perform SEV ACTIVATE command
+ *
+ * @activate: sev_data_activate structure to be processed
+ * @sev_ret: sev command return code
+ *
+ * Returns:
+ * 0 if the sev successfully processed the command
+ * -%ENODEV    if the sev device is not available
+ * -%ENOTSUPP  if the sev does not support SEV
+ * -%ETIMEDOUT if the sev command timed out
+ * -%EIO       if the sev returned a non-zero return code
+ */
+int sev_guest_activate(struct sev_data_activate *data, int *error);
+
+/**
+ * sev_guest_df_flush - perform SEV DF_FLUSH command
+ *
+ * @sev_ret: sev command return code
+ *
+ * Returns:
+ * 0 if the sev successfully processed the command
+ * -%ENODEV    if the sev device is not available
+ * -%ENOTSUPP  if the sev does not support SEV
+ * -%ETIMEDOUT if the sev command timed out
+ * -%EIO       if the sev returned a non-zero return code
+ */
+int sev_guest_df_flush(int *error);
+
+/**
+ * sev_guest_decommission - perform SEV DECOMMISSION command
+ *
+ * @decommission: sev_data_decommission structure to be processed
+ * @sev_ret: sev command return code
+ *
+ * Returns:
+ * 0 if the sev successfully processed the command
+ * -%ENODEV    if the sev device is not available
+ * -%ENOTSUPP  if the sev does not support SEV
+ * -%ETIMEDOUT if the sev command timed out
+ * -%EIO       if the sev returned a non-zero return code
+ */
+int sev_guest_decommission(struct sev_data_decommission *data, int *error);
+
+#else	/* !CONFIG_CRYPTO_DEV_PSP_SEV */
+
+static inline int sev_platform_status(struct sev_data_status *status,
+				      int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_platform_init(struct sev_data_init *init, int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_platform_shutdown(int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_issue_cmd_external_user(int fd, unsigned int id,
+					void *data, int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_guest_deactivate(struct sev_data_deactivate *data,
+					int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_guest_decommission(struct sev_data_decommission *data,
+					int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_guest_activate(struct sev_data_activate *data,
+					int *error)
+{
+	return -ENODEV;
+}
+
+static inline int sev_guest_df_flush(int *error)
+{
+	return -ENODEV;
+}
+
+#endif	/* CONFIG_CRYPTO_DEV_PSP_SEV */
+
+#endif	/* __PSP_SEV_H__ */
