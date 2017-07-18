@@ -22,6 +22,7 @@
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 
 extern unsigned long sme_me_mask;
+extern unsigned int sev_enabled;
 
 void sme_encrypt_execute(unsigned long encrypted_kernel_vaddr,
 			 unsigned long decrypted_kernel_vaddr,
@@ -50,6 +51,7 @@ void swiotlb_set_mem_attributes(void *vaddr, unsigned long size);
 #else	/* !CONFIG_AMD_MEM_ENCRYPT */
 
 #define sme_me_mask	0UL
+#define sev_enabled	0
 
 static inline void __init sme_early_encrypt(resource_size_t paddr,
 					    unsigned long size) { }

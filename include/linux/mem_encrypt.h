@@ -22,12 +22,18 @@
 #else	/* !CONFIG_ARCH_HAS_MEM_ENCRYPT */
 
 #define sme_me_mask	0UL
+#define sev_enabled	0
 
 #endif	/* CONFIG_ARCH_HAS_MEM_ENCRYPT */
 
 static inline bool sme_active(void)
 {
-	return !!sme_me_mask;
+	return (sme_me_mask && !sev_enabled);
+}
+
+static inline bool sev_active(void)
+{
+	return (sme_me_mask && sev_enabled);
 }
 
 static inline unsigned long sme_get_me_mask(void)

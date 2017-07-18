@@ -40,6 +40,9 @@ static char sme_cmdline_off[] __initdata = "off";
 unsigned long sme_me_mask __section(.data) = 0;
 EXPORT_SYMBOL_GPL(sme_me_mask);
 
+unsigned int sev_enabled __section(.data) = 0;
+EXPORT_SYMBOL_GPL(sev_enabled);
+
 /* Buffer used for early in-place encryption by BSP, no locking needed */
 static char sme_early_buffer[PAGE_SIZE] __aligned(PAGE_SIZE);
 
