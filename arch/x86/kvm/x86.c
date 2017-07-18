@@ -3974,6 +3974,14 @@ split_irqchip_unlock:
 	return r;
 }
 
+static int kvm_vm_ioctl_memory_encryption_op(struct kvm *kvm, void __user *argp)
+{
+	if (kvm_x86_ops->memory_encryption_op)
+		return kvm_x86_ops->memory_encryption_op(kvm, argp);
+
+	return -ENOTTY;
+}
+
 long kvm_arch_vm_ioctl(struct file *filp,
 		       unsigned int ioctl, unsigned long arg)
 {
@@ -4232,6 +4240,10 @@ long kvm_arch_vm_ioctl(struct file *filp,
 		if (copy_from_user(&cap, argp, sizeof(cap)))
 			goto out;
 		r = kvm_vm_ioctl_enable_cap(kvm, &cap);
+		break;
+	}
+	case KVM_MEMORY_ENCRYPT_OP: {
+		r = kvm_vm_ioctl_memory_encryption_op(kvm, argp);
 		break;
 	}
 	default:
