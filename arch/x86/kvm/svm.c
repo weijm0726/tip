@@ -6024,6 +6024,40 @@ static int sev_launch_finish(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	return ret;
 }
 
+static int sev_guest_status(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct kvm_sev_guest_status params;
+	struct sev_data_guest_status *data;
+	int ret;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	if (copy_from_user(&params, (void *) argp->data,
+				sizeof(struct kvm_sev_guest_status)))
+		return -EFAULT;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	data->handle = sev_get_handle(kvm);
+	ret = sev_issue_cmd(kvm, SEV_CMD_GUEST_STATUS, data, &argp->error);
+	if (ret)
+		goto e_free;
+
+	params.policy = data->policy;
+	params.state = data->state;
+	params.handle = data->handle;
+
+	if (copy_to_user((void *) argp->data, &params,
+				sizeof(struct kvm_sev_guest_status)))
+		ret = -EFAULT;
+e_free:
+	kfree(data);
+	return ret;
+}
+
 static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 {
 	struct kvm_sev_cmd sev_cmd;
@@ -6053,6 +6087,10 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_LAUNCH_FINISH: {
 		r = sev_launch_finish(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_GUEST_STATUS: {
+		r = sev_guest_status(kvm, &sev_cmd);
 		break;
 	}
 	default:
