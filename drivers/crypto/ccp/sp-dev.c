@@ -198,6 +198,8 @@ int sp_init(struct sp_device *sp)
 	if (sp->dev_vdata->ccp_vdata)
 		ccp_dev_init(sp);
 
+	if (sp->dev_vdata->psp_vdata)
+		psp_dev_init(sp);
 	return 0;
 }
 
@@ -205,6 +207,9 @@ void sp_destroy(struct sp_device *sp)
 {
 	if (sp->dev_vdata->ccp_vdata)
 		ccp_dev_destroy(sp);
+
+	if (sp->dev_vdata->psp_vdata)
+		psp_dev_destroy(sp);
 
 	sp_del_device(sp);
 }
@@ -215,6 +220,12 @@ int sp_suspend(struct sp_device *sp, pm_message_t state)
 
 	if (sp->dev_vdata->ccp_vdata) {
 		ret = ccp_dev_suspend(sp, state);
+		if (ret)
+			return ret;
+	}
+
+	if (sp->dev_vdata->psp_vdata) {
+		ret = psp_dev_suspend(sp, state);
 		if (ret)
 			return ret;
 	}
@@ -232,7 +243,39 @@ int sp_resume(struct sp_device *sp)
 			return ret;
 	}
 
+	if (sp->dev_vdata->psp_vdata) {
+		ret = psp_dev_resume(sp);
+		if (ret)
+			return ret;
+	}
 	return 0;
+}
+
+struct sp_device *sp_get_psp_master_device(void)
+{
+	unsigned long flags;
+	struct sp_device *i, *ret = NULL;
+
+	write_lock_irqsave(&sp_unit_lock, flags);
+	if (list_empty(&sp_units))
+		goto unlock;
+
+	list_for_each_entry(i, &sp_units, entry) {
+		if (i->psp_data)
+			break;
+	}
+
+	if (i->get_psp_master_device)
+		ret = i->get_psp_master_device();
+unlock:
+	write_unlock_irqrestore(&sp_unit_lock, flags);
+	return ret;
+}
+
+void sp_set_psp_master(struct sp_device *sp)
+{
+	if (sp->set_psp_master_device)
+		sp->set_psp_master_device(sp);
 }
 
 static int __init sp_mod_init(void)
