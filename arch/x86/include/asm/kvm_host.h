@@ -1073,6 +1073,7 @@ struct kvm_x86_ops {
 					struct kvm_memory_encrypt_ram *ram);
 	int (*memory_encryption_unregister_ram)(struct kvm *kvm,
 					struct kvm_memory_encrypt_ram *ram);
+	bool (*memory_encryption_enabled)(struct kvm_vcpu *vcpu);
 };
 
 struct kvm_arch_async_pf {

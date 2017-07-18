@@ -6548,6 +6548,12 @@ static int mem_encrypt_unregister_ram(struct kvm *kvm,
 	return 0;
 }
 
+static bool mem_encrypt_enabled(struct kvm_vcpu *vcpu)
+{
+	return !!(to_svm(vcpu)->vmcb->control.nested_ctl &
+					SVM_NESTED_CTL_SEV_ENABLE);
+}
+
 static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.cpu_has_kvm_support = has_svm,
 	.disabled_by_bios = is_disabled,
@@ -6664,6 +6670,8 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.memory_encryption_op = svm_memory_encryption_op,
 	.memory_encryption_register_ram = mem_encrypt_register_ram,
 	.memory_encryption_unregister_ram = mem_encrypt_unregister_ram,
+	.memory_encryption_enabled = mem_encrypt_enabled,
+
 };
 
 static int __init svm_init(void)
