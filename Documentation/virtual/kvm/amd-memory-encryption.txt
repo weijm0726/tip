@@ -1,0 +1,328 @@
+Secure Encrypted Virtualization (SEV) is a feature found on AMD processors.
+
+SEV is an extension to the AMD-V architecture which supports running virtual
+machine (VMs) under the control of a hypervisor. When enabled, the memory
+contents of VM will be transparently encrypted with a key unique to the VM.
+
+Hypervisor can determine the SEV support through the CPUID instruction. The CPUID
+function 0x8000001f reports information related to SEV:
+
+	0x8000001f[eax]:
+		Bit[1] 	indicates support for SEV
+
+	0x8000001f[ecx]:
+		Bits[31:0]  Number of encrypted guest supported simultaneously
+
+If support for SEV is present, MSR 0xc00100010 (MSR_K8_SYSCFG) and MSR
+0xc0000015 (MSR_K7_HWCR_SMMLOCK) can be used to determine if it can be enabled:
+
+	0xc00100010:
+		Bit[23]	   0 = memory encryption can be enabled
+			   0 = memory encryption can not be enabled
+
+	0xc00010015:
+		Bit[0]	   0 = memory encryption can not be enabled
+			   1 = memory encryption can be enabled
+
+When SEV support is available, it can be enabled on specific VM during the VMRUN
+instruction by setting SEV bit in VMCB offset 090h:
+
+	VMCB offset 090h:
+		Bit[1]	    1 = Enable SEV
+
+SEV hardware uses ASIDs to associate memory encryption key with the guest VMs.
+Hence the ASID for the SEV-enabled guests must be from 1 to a maximum value
+defined through the CPUID function 0x8000001f[ECX].
+
+
+SEV Key Management
+------------------
+
+The Key management for the SEV guest is handled by a seperate processor known as
+the AMD Secure Processor (AMD-SP). Firmware running inside the AMD-SP provides a
+secure key management interface to perform common hypervisor activities such as
+encrypting bootstrap code, snapshotting, migrating and debugging the guest. For
+more informaiton, see SEV Key Management spec:
+
+http://support.amd.com/TechDocs/55766_SEV-KM%20API_Specification.pdf
+
+1. KVM_SEV_LAUNCH_START
+
+Parameters: struct  kvm_sev_launch_start (in/out)
+Returns: 0 on success, -negative on error
+
+LAUNCH_START command is used to bootstrap a guest by encrypting its memory with
+a new VM Encryption Key (VEK). In order to create guest context, hypervisor should
+provide guest policy, owners public diffie-hellman (PDH) key and session parameters.
+
+The guest policy constrains the use and features activated for the lifetime of the
+launched guest, such as disallowing debugging, enabling key sharing, or turning on
+other SEV related features.
+
+The guest owners PDH allows the firmware to establish a cryptographic session with
+the guest owner to negotiate keys used for attestation.
+
+The session parameters contains informations such as guest policy MAC, transport
+integrity key (TIK), transport encryption key (TEK) etc.
+
+struct kvm_sev_launch_start {
+
+	/* Guest Hanldle, if zero then FW creates a new handle */
+	__u32 handle;
+
+	/* Guest policy */
+	__u32 policy;
+
+	/* Address which contains guest owner's PDH certificate blob */
+	__u64 dh_cert_address;
+	__u32 dh_cert_length;
+
+	/* Address which contains guest session information blob */
+	__u64 session_address;
+	__u32 session_length;
+};
+
+On success, the 'handle' field contain a new handle.
+
+2. KVM_SEV_LAUNCH_UPDATE_DATA
+
+Parameters (in): struct  kvm_sev_launch_update
+Returns: 0 on success, -negative on error
+
+LAUNCH_UPDATE_DATA encrypts the memory region using the VEK created during
+LAUNCH_START. It also calculates a measurement of the memory region. This
+measurement can be used as a signature of the memory contents.
+
+struct kvm_sev_launch_update {
+	/* address of the data to be encrypted (must be 16-byte aligned) */
+	__u64 address;
+
+	/* length of the data to be encrypted (must be 16-byte aligned) */
+	__u32 length;
+};
+
+3. KVM_SEV_LAUNCH_MEASURE
+
+Parameters (in): struct  kvm_sev_launch_measure
+Returns: 0 on success, -negative on error
+
+LAUNCH_MEASURE returns the measurement of the memory region encrypted with
+LAUNCH_UPDATE_DATA. The measurement is keyed with the TIK so that the guest
+owner can use the measurement to verify the guest was properly launched without
+tempering.
+
+struct kvm_sev_launch_measure {
+	/* where to copy the measurement blob */
+	__u64 address;
+
+	/* length of memory region containing measurement */
+	__u32 length;
+};
+
+If measurement length is too small, the required length is returned in the
+length field.
+
+On success, the measurement is copied to the address.
+
+4. KVM_SEV_LAUNCH_FINISH
+
+Returns: 0 on success, -negative on error
+
+LAUNCH_FINISH command finalize the SEV guest launch process.
+
+5. KVM_SEV_GUEST_STATUS
+
+Parameters (out): struct kvm_sev_guest_status
+Returns: 0 on success, -negative on error
+
+GUEST_STATUS returns the current SEV state the guest is in.
+
+struct kvm_sev_guest_status {
+
+	/* guest hanldle */
+	__u32 handle;
+
+	/* guest policy */
+	__u32 policy;
+
+	/* guest state  (see below) */
+	__u8 state;
+};
+
+SEV guest state:
+
+enum {
+	/* guest state is not known */
+	SEV_STATE_INVALID = 0;
+	/* guest is currently being launched */
+	SEV_STATE_LAUNCHING.
+	/* guest is being launched and ready to accept the ciphertext data */
+	SEV_STATE_SECRET,
+	/* guest is fully launched and running */
+	SEV_STATE_RUNNING,
+	/* guest is being migrated in from another SEV machine */
+	SEV_STATE_RECEIVING,
+	/* guest is getting migrated out another SEV machine */
+	SEV_STATE_SENDING
+};
+
+6. KVM_SEV_DBG_DECRYPT
+
+DEBUG_DECRYPT command can be used for decrypting a region of guest memory for
+the SEV guest debug purposes. Note that since decrypting protected memory allows
+the hypervisor to gain access to guest memory, the guest policy must explicitly
+allow debugging for this command to work.
+
+Parameters (in): struct kvm_sev_dbg
+Returns: 0 on success, -negative on error
+
+struct kvm_sev_dbg {
+	__u64 src_address;
+	__u64 dst_address;
+
+	/* length of memory region to decrypt */
+	__u32 length;
+};
+
+7. KVM_SEV_DBG_ENCRYPT
+
+DEBUG_ENCRYPT command can be used for injecting the data into guest for the SEV
+guest debug purposes. Note that since injecting the data into protected memory
+allows the hypervisor to modify the guest memory, the guest policy must explicitly
+allow debugging for this command to work.
+
+Parameters (in): struct kvm_sev_dbg
+Returns: 0 on success, -negative on error
+
+struct kvm_sev_dbg {
+	__u64 src_address;
+	__u64 dst_address;
+
+	/* length of memory region to encrypt */
+	__u32 length;
+};
+
+8. KVM_SEV_SEND_START
+
+Parameters (in): struct kvm_sev_send_start
+Returns: 0 on success, -negative on error
+
+SEND_START command is used to export a SEV guest from one platform to another.
+It can be used for saving a guest to disk to be resumed later, or it can be
+used to migrate a guest across the network to a receiving platform.
+
+struct kvm_sev_send_start {
+	/* guest policy */
+	__u32 policy;
+
+	/* address which contains receivers PDH key blob */
+	__u64 pdh_cert_address;
+	__u32 pdh_cert_length;
+
+	/* address which contains platform certificate blob */
+	__u64 plat_cert_address;
+	__u32 plat_cert_length;
+
+	/* address which contains AMD certificate chain */
+	__u64 amd_cert_address;
+	__u32 amd_cert_length;
+
+	/* where to copy the current session information */
+	__u64 session_address;
+	__u32 session_length;
+};
+
+The command uses PDH key to establish a new cryptographic context with the
+remote platform - the new cryptographic context will be used for re-encrypting
+the guest memory before sending it to remote platform.
+
+If length of the certificate blobs are too small, the required length is
+returned in the length field and an error is returned.
+
+9. KVM_SEV_SEND_UPDATE_DATA
+
+Parameters (in): struct kvm_sev_send_update_data
+Returns: 0 on success, -negative on error
+
+SEND_UPDATE_DATA command is used to re-encrypt the guest memory using the
+crytographic context established during SEND_START. A fresh IV is generated
+and written to the packet header field.
+
+struct kvm_sev_send_update_data {
+	/* address which will contain packet header (IV, MAC etc)*/
+	__u64 hdr_data;
+	__u32 hdr_length;
+
+	/* address of guest memory region containg encrypted data */
+	__u64 guest_address;
+	__u32 guest_length;
+
+	/* address of transport buffer */
+	__u64 host_address;
+	__u32 host_length;
+};
+
+If the hdr_length is too small, the required length is returned in the length
+field and an error is returned.
+
+10. KVM_SEV_SEND_FINISH
+
+Returns: 0 on success, -negative on error
+
+SEND_FINISH command finalize the SEV guest sending process.
+
+11. KVM_SEV_RECEIVE_START
+
+Parameters (in): struct kvm_sev_receive_start
+Returns: 0 on success, -negative on error
+
+RECEIVE_START command is used to import a guest from one platform to another.
+It can be used for restoring a guest from disk, or it can be used to migrate
+a guest across the network from a sending platform.
+
+struct kvm_sev_receive_start {
+	/* guest handle (if zero then new handle will be created) */
+	__u32 handle;
+
+	/* guest policy */
+	__u32 policy;
+
+	/* Address containing senders PDH certificate blob */
+	__u64 pdh_cert_address;
+	__u32 pdh_cert_length;
+
+	/* Address containing sender's session information blob */
+	__u64 session_address;
+	__u32 session_length;
+};
+
+The RECEIVE_START command creates a new cryptographic context necessary to
+re-enrypt the guest memory receieved through the RECEIVE_UPDATE command.
+
+12. KVM_SEV_RECEIVE_UPDATE_DATA
+
+Parameters (in): struct kvm_sev_receive_update_data
+Returns: 0 on success, -negative on error
+
+RECEIVE_UPDATE_DATA command is used to re-encrypt the guest memory using the
+crytographic context established during RECEIVE_START.
+
+struct kvm_sev_receive_update_data {
+	/* packet header receieved from the SEND_UPDATE_DATA command */
+	__u64 hdr_data;
+	__u32 hdr_length;
+
+	/* address of guest memory region */
+	__u64 guest_address;
+	__u32 guest_length;
+
+	/* address of transport buffer */
+	__u64 host_address;
+	__u32 host_length;
+};
+
+13. KVM_SEV_RECEIVE_FINISH
+
+Returns: 0 on success, -negative on error
+
+RECEIVE_FINISH command finalize the SEV guest receiving process.
