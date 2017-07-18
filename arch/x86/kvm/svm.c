@@ -6058,6 +6058,162 @@ e_free:
 	return ret;
 }
 
+static int __sev_dbg_enc_dec(struct kvm *kvm, unsigned long src,
+			     unsigned long dst, int size, int *error, bool enc)
+{
+	struct sev_data_dbg *data;
+	int ret;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	data->handle = sev_get_handle(kvm);
+	data->dst_addr = dst;
+	data->src_addr = src;
+	data->length = size;
+
+	ret = sev_issue_cmd(kvm,
+			    enc ? SEV_CMD_DBG_ENCRYPT : SEV_CMD_DBG_DECRYPT,
+			    data, error);
+	kfree(data);
+	return ret;
+}
+
+/*
+ * Decrypt source memory into userspace or kernel buffer. If destination buffer
+ * or len is not aligned to 16-byte boundary then it uses intermediate buffer.
+ */
+static int __sev_dbg_dec(struct kvm *kvm, unsigned long paddr,
+			 unsigned long __user dst_uaddr,
+			 unsigned long dst_kaddr, unsigned long dst_paddr,
+			 int size, int *error)
+{
+	int ret, offset, len = size;
+	struct page *tpage = NULL;
+
+	/*
+	 * Debug command works with 16-byte aligned inputs, check if all inputs
+	 * (src, dst and len) are 16-byte aligned. If one of the input is not
+	 * aligned then we decrypt more than requested into a temporary buffer
+	 * and copy the porition of data into destination buffer.
+	 */
+	if (!IS_ALIGNED(paddr, 16) || !IS_ALIGNED(dst_paddr, 16) ||
+			!IS_ALIGNED(size, 16)) {
+		tpage = (void *)alloc_page(GFP_KERNEL);
+		if (!tpage)
+			return -ENOMEM;
+
+		dst_paddr = __sme_page_pa(tpage);
+
+		/*
+		 * if source buffer is not aligned then offset will be used
+		 * when copying the data from the temporary buffer into
+		 * destination buffer.
+		 */
+		offset = paddr & 15;
+
+		/* its safe to read more than requested size. */
+		len = round_up(size + offset, 16);
+
+		paddr = round_down(paddr, 16);
+	}
+
+	ret = __sev_dbg_enc_dec(kvm, paddr, dst_paddr, len, error, false);
+	/*
+	 * If temporary buffer is used then copy the data from temporary buffer
+	 * into destination buffer.
+	 */
+	if (tpage) {
+
+		/*
+		 * If destination buffer is a userspace buffer then use
+		 * copy_to_user otherwise memcpy.
+		 */
+		if (dst_uaddr) {
+			if (copy_to_user((uint8_t *)dst_uaddr,
+				page_address(tpage) + offset, size))
+				ret = -EFAULT;
+		} else {
+			memcpy((void *)dst_kaddr,
+				page_address(tpage) + offset, size);
+		}
+
+		__free_page(tpage);
+	}
+
+	return ret;
+}
+
+static int sev_dbg_decrypt(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	unsigned long vaddr, vaddr_end, next_vaddr;
+	unsigned long dst_vaddr, dst_vaddr_end;
+	struct page **srcpage, **dstpage;
+	struct kvm_sev_dbg debug;
+	unsigned long n;
+	int ret, size;
+
+	if (!sev_guest(kvm))
+		return -ENOTTY;
+
+	if (copy_from_user(&debug, (void *)argp->data,
+				sizeof(struct kvm_sev_dbg)))
+		return -EFAULT;
+
+	vaddr = debug.src_addr;
+	size = debug.length;
+	vaddr_end = vaddr + size;
+	dst_vaddr = debug.dst_addr;
+	dst_vaddr_end = dst_vaddr + size;
+
+	for (; vaddr < vaddr_end; vaddr = next_vaddr) {
+		int len, s_off, d_off;
+
+		/* lock userspace source and destination page */
+		srcpage = sev_pin_memory(vaddr & PAGE_MASK, PAGE_SIZE, &n, 0);
+		if (!srcpage)
+			return -EFAULT;
+
+		dstpage = sev_pin_memory(dst_vaddr & PAGE_MASK, PAGE_SIZE,
+					&n, 1);
+		if (!dstpage) {
+			sev_unpin_memory(srcpage, n);
+			return -EFAULT;
+		}
+
+		/* flush the caches to ensure that DRAM has recent contents */
+		sev_clflush_pages(srcpage, 1);
+		sev_clflush_pages(dstpage, 1);
+
+		/*
+		 * since user buffer may not be page aligned, calculate the
+		 * offset within the page.
+		 */
+		s_off = vaddr & ~PAGE_MASK;
+		d_off = dst_vaddr & ~PAGE_MASK;
+		len = min_t(size_t, (PAGE_SIZE - s_off), size);
+
+		ret = __sev_dbg_dec(kvm,
+				    __sme_page_pa(srcpage[0]) + s_off,
+				    dst_vaddr, 0,
+				    __sme_page_pa(dstpage[0]) + d_off,
+				    len, &argp->error);
+
+		sev_unpin_memory(srcpage, 1);
+		sev_unpin_memory(dstpage, 1);
+
+		if (ret)
+			goto err;
+
+		next_vaddr = vaddr + len;
+		dst_vaddr = dst_vaddr + len;
+		size -= len;
+	}
+err:
+	return ret;
+}
+
 static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 {
 	struct kvm_sev_cmd sev_cmd;
@@ -6091,6 +6247,10 @@ static int svm_memory_encryption_op(struct kvm *kvm, void __user *argp)
 	}
 	case KVM_SEV_GUEST_STATUS: {
 		r = sev_guest_status(kvm, &sev_cmd);
+		break;
+	}
+	case KVM_SEV_DBG_DECRYPT: {
+		r = sev_dbg_decrypt(kvm, &sev_cmd);
 		break;
 	}
 	default:
