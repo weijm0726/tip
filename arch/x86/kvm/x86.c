@@ -4707,16 +4707,16 @@ static int emulator_read_write_onepage(unsigned long addr, void *val,
 	 */
 	if (vcpu->arch.gpa_available &&
 	    emulator_can_use_gpa(ctxt) &&
-	    vcpu_is_mmio_gpa(vcpu, addr, exception->address, write) &&
 	    (addr & ~PAGE_MASK) == (exception->address & ~PAGE_MASK)) {
-		gpa = exception->address;
-		goto mmio;
+		gpa = vcpu->arch.gpa_val;
+		ret = vcpu_is_mmio_gpa(vcpu, addr, gpa, write);
+	} else {
+
+		ret = vcpu_mmio_gva_to_gpa(vcpu, addr, &gpa, exception, write);
+
+		if (ret < 0)
+			return X86EMUL_PROPAGATE_FAULT;
 	}
-
-	ret = vcpu_mmio_gva_to_gpa(vcpu, addr, &gpa, exception, write);
-
-	if (ret < 0)
-		return X86EMUL_PROPAGATE_FAULT;
 
 	/* For APIC access vmexit */
 	if (ret)

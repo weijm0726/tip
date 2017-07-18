@@ -2325,6 +2325,10 @@ static int pf_interception(struct vcpu_svm *svm)
 {
 	u64 fault_address = __sme_clr(svm->vmcb->control.exit_info_2);
 	u64 error_code = svm->vmcb->control.exit_info_1;
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+
+	/* On #NPF, exit_info_2 contains a valid GPA */
+	vcpu->arch.gpa_val = fault_address;
 
 	return kvm_handle_page_fault(&svm->vcpu, error_code, fault_address,
 			svm->vmcb->control.insn_bytes,
